@@ -1,0 +1,16 @@
+{
+  "name": "GA Life",
+  "short_name": "GA Life",
+  "description": "La vostra vita di coppia in una casetta isometrica: bisogni, lavoro, arredamento",
+  "lang": "it",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1a1426",
+  "theme_color": "#1a1426",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

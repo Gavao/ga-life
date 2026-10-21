@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="theme-color" content="#1a1426">
+  <!-- iPhone: si installa da Safari con Condividi → Aggiungi alla schermata Home -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="GA Life">
+  <title>GA Life</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <!-- In alto: ora e giorno, velocità del tempo, soldi -->
+  <header id="top">
+    <div id="clock"></div>
+    <div class="speeds">
+      <button data-speed="0" aria-label="Pausa">⏸</button><button data-speed="1" aria-label="Velocità normale">▶</button>
+      <button data-speed="2" aria-label="Veloce">▶▶</button><button data-speed="3" aria-label="Velocissimo">▶▶▶</button>
+    </div>
+    <div id="money"></div>
+  </header>
+  <div id="portraits"></div>
+  <div id="zoom"><button data-zoom="+" aria-label="Avvicina">+</button><button data-zoom="-" aria-label="Allontana">−</button></div>
+
+  <!-- In basso: bisogni del Sim selezionato (o il negozio in modalità Arreda) e i pulsanti -->
+  <section id="bottom">
+    <div id="panel"></div>
+    <nav id="tools">
+      <button data-build><span>🛋️</span>Arreda</button>
+      <button data-jobs><span>💼</span>Lavoro</button>
+      <button data-settings><span>⚙</span>Altro</button>
+    </nav>
+  </section>
+
+  <div id="menu" hidden></div>
+  <div id="toasts"></div>
+  <div id="create" hidden></div>
+  <dialog id="sheet"></dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
