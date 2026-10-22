@@ -35,13 +35,13 @@ button { cursor: pointer; }
 #money { padding: 6px 10px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); font-weight: 800; color: var(--green); white-space: nowrap; }
 #money.neg { color: #f87171; }
 
-#portraits { position: fixed; left: 8px; top: calc(env(safe-area-inset-top) + 64px); z-index: 5; display: grid; gap: 8px; }
+#portraits { position: fixed; left: 8px; top: calc(env(safe-area-inset-top) + 118px); z-index: 5; display: grid; gap: 8px; }
 .portrait { position: relative; display: grid; justify-items: center; gap: 2px; width: 58px; padding: 6px 2px; border: 2px solid transparent; border-radius: 14px; background: var(--panel); }
 .portrait.on { border-color: var(--green); }
 .portrait .face { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; border: 4px solid; color: #1f2937; font-weight: 900; box-shadow: 0 0 0 3px var(--mood); }
 .portrait small { font-size: 10px; max-width: 54px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .portrait i { position: absolute; top: 2px; right: 2px; font-style: normal; font-size: 13px; }
-#zoom { position: fixed; right: 8px; top: calc(env(safe-area-inset-top) + 64px); z-index: 5; display: grid; gap: 6px; }
+#zoom { position: fixed; right: 8px; top: calc(env(safe-area-inset-top) + 118px); z-index: 5; display: grid; gap: 6px; }
 #zoom button { width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 50%; background: var(--panel); font-size: 20px; font-weight: 800; }
 
 /* In basso */
@@ -101,7 +101,7 @@ body.building [data-build] { background: var(--green); color: var(--green-ink); 
 #menu button { padding: 10px 12px; border: 0; border-radius: 10px; background: #f1f5f9; text-align: left; font-weight: 600; color: #1f2937; }
 #menu button:active { background: #bbf7d0; }
 
-#toasts { position: fixed; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 60px); z-index: 9; display: grid; justify-items: center; gap: 6px; pointer-events: none; }
+#toasts { position: fixed; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 116px); z-index: 9; display: grid; justify-items: center; gap: 6px; pointer-events: none; }
 .toast { max-width: 460px; padding: 9px 14px; border-radius: 12px; background: rgba(255, 255, 255, .95); color: #1f2937; font-weight: 600; box-shadow: 0 6px 20px rgba(0, 0, 0, .3); }
 
 /* Creazione della coppia */
@@ -147,3 +147,24 @@ h3 { margin: 16px 0 6px; font-size: 13px; text-transform: uppercase; letter-spac
 .box { padding: 10px 12px; border-radius: 12px; background: var(--panel-2); }
 .box summary { font-weight: 700; }
 .box p { color: var(--muted); font-size: 13px; }
+
+/* Obiettivo in corso (in alto), azione in corso, desideri, pannello richiudibile */
+#goal {
+  position: fixed; left: 8px; right: 8px; top: calc(env(safe-area-inset-top) + 56px); z-index: 5; max-width: 560px; margin: 0 auto;
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid rgba(74, 222, 128, .5); border-radius: 14px;
+  background: var(--panel); text-align: left;
+}
+#goal[hidden] { display: none; }
+#goal > span:first-child { font-size: 20px; }
+#goal span:nth-child(2) { flex: 1; display: grid; line-height: 1.25; }
+#goal b { font-size: 13px; }
+#goal small { color: var(--muted); font-size: 11px; }
+#goal em, .goal-row em { font-style: normal; font-weight: 800; color: var(--green); white-space: nowrap; }
+.goal-row.done { opacity: .55; }
+.who { cursor: pointer; position: relative; padding-right: 22px; }
+.fold { position: absolute; right: 0; top: 2px; font-style: normal; color: var(--muted); font-size: 12px; }
+.doing { margin-top: 4px; font-weight: 700; font-size: 13px; }
+.queue small { font-size: 11px; }
+.wishes { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin: 2px 0 8px; font-size: 12px; color: #fde68a; }
+.wishes span { padding: 2px 8px; border-radius: 10px; background: rgba(253, 230, 138, .12); }
+#bottom.mini .needs, #bottom.mini .rel, #bottom.mini .wishes, #bottom.mini .queue small { display: none; }

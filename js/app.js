@@ -3,9 +3,10 @@
 // Tutto resta nel telefono (IndexedDB): la partita si salva da sola.
 import { getSetting, setSetting } from './db.js';
 import { APP_VERSION } from './version.js';
-import { makeView, floorTile, wallY0, wallX0, windowY0, windowX0, drawSim, bubble } from './iso.js';
+import { makeView, floorTile, wallY0, wallX0, windowY0, windowX0, drawSim, bubble, box } from './iso.js';
 import { TYPES, CATS, NEEDS, SOCIAL, footprint } from './catalog.js';
-import { newGame, tick, order, cancel, actionsFor, mood, canPlace, timeText, dayText, SPEEDS, CAREERS, oa } from './game.js';
+import { newGame, tick, order, cancel, actionsFor, mood, canPlace, timeText, dayText, SPEEDS, CAREERS, oa,
+  migrate, gameEvent, currentGoal, GOALS, WISHES } from './game.js';
 
 const $ = sel => document.querySelector(sel);
 const canvas = $('#canvas');
@@ -19,11 +20,12 @@ let g = null;            // la partita
 let sel = 0;             // Sim selezionato
 let w = 0, h = 0;
 const v = makeView();
+let mini = (() => { try { return localStorage.getItem('mini') === '1'; } catch { return false; } })();   // pannello in basso ridotto
 let build = null;        // modalità Arreda: { cat, placing: { type, x, y, rot, color, moveId } }
 
 const ICONS = { letto: '🛏️', lettoSingolo: '🛏️', frigo: '🧊', fornello: '🍳', lavello: '🚰', tavolo: '🍽️', doccia: '🚿', wc: '🚽', lavandino: '🪞',
   divano: '🛋️', poltrona: '💺', tv: '📺', computer: '💻', libreria: '📚', stereo: '🔊', tapis: '🏃', pianta: '🪴', lampada: '💡', tappeto: '🟥', quadro: '🖼️' };
-const FLOORS = { legno: ['#c8925f', '#bd8655'], cucina: ['#f5f5f4', '#e7e5e4'], bagno: ['#bfdbfe', '#a5c8f5'] };
+const FLOORS = { legno: ['#c8925f', '#bd8655'], cucina: ['#f5f5f4', '#e7e5e4'], bagno: ['#bfdbfe', '#a5c8f5'], camera: ['#e9d5b7', '#e2cba9'] };
 
 function toast(text) {
   const box = $('#toasts');
@@ -95,6 +97,11 @@ function draw() {
     items.push({ depth: f.x + f.w + f.y + f.d - 0.01, o });
   }
   for (const s of g.sims) if (!s.atWork) items.push({ depth: s.x + s.y + (s.pose === 'lie' ? 1.2 : s.pose === 'sit' ? 0.4 : 0.05), s });
+  // Muri interni: bassi (vista "tagliata" come in The Sims), un pezzo per casella
+  for (const wl of g.walls ?? []) {
+    if (wl.v != null) for (let y = wl.y0; y < wl.y1; y++) items.push({ depth: wl.v + y + 0.98, wall: [wl.v - 0.06, y, 0.12, 1] });
+    else for (let x = wl.x0; x < wl.x1; x++) items.push({ depth: x + wl.h + 0.98, wall: [x, wl.h - 0.06, 1, 0.12] });
+  }
   if (build?.placing) {
     const p = build.placing;
     const f = footprint(p);
@@ -106,9 +113,10 @@ function draw() {
       if (build?.placing?.moveId === it.o.id) continue;
       TYPES[it.o.type].draw(ctx, v, it.o);
     } else if (it.ghost) drawGhost(it.ghost);
+    else if (it.wall) box(ctx, v, ...it.wall, 34, '#ddd6fe', { top: '#7c3aed' });
     else drawOneSim(it.s);
   }
-  for (const s of g.sims) if (!s.atWork) drawBubble(s);
+  for (const s of g.sims) if (!s.atWork) { drawName(s); drawBubble(s); }
   // Velo della notte
   if (night > 0) {
     ctx.fillStyle = `rgba(30,27,75,${0.32 * Math.min(1, night)})`;
@@ -132,6 +140,19 @@ function drawOneSim(s) {
     ctx.fillStyle = 'rgba(255,255,255,.5)';
     for (let i = 0; i < 4; i++) { const t = performance.now() / 600 + i; ctx.beginPath(); ctx.arc(sx + Math.sin(t) * 10 * v.z, sy - 40 * v.z - (t % 1) * 30 * v.z, 6 * v.z, 0, Math.PI * 2); ctx.fill(); }
   }
+}
+
+/** Nome sotto i piedi, così si capisce sempre chi è chi (verde quello che comandi). */
+function drawName(s) {
+  const [sx, sy] = v.at(s.x, s.y, s.pose === 'lie' ? 20 : s.pose === 'sit' ? 6 : 0);
+  ctx.font = `800 ${Math.max(10, 11 * v.z)}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const y = sy + 8 * v.z, tw = ctx.measureText(s.name).width + 10;
+  ctx.fillStyle = s.id === sel ? 'rgba(22,163,74,.9)' : 'rgba(26,20,38,.75)';
+  ctx.beginPath(); ctx.roundRect?.(sx - tw / 2, y - 2, tw, 16, 8); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.fillText(s.name, sx, y);
 }
 
 function drawBubble(s) {
@@ -162,13 +183,20 @@ function hud() {
   for (const b of document.querySelectorAll('[data-speed]')) b.classList.toggle('on', +b.dataset.speed === g.speed && !build);
   $('#portraits').innerHTML = g.sims.map(s => `<button class="portrait ${s.id === sel ? 'on' : ''}" data-sel="${s.id}" style="--mood:hsl(${Math.round(mood(s) * 1.2)},75%,48%)">
       <span class="face" style="background:${s.look.skin};border-color:${s.look.hair}">${esc(s.name[0] ?? '?')}</span><small>${esc(s.name)}</small>${s.atWork ? '<i>💼</i>' : ''}</button>`).join('');
-  if (build) return;
+  $('#bottom').classList.toggle('mini', mini && !build);
+  if (build) { $('#goal').hidden = true; return; }
   const s = g.sims[sel];
   const job = s.job && CAREERS[s.job.career];
   const q = [s.cur, ...s.queue.map(c => ({ ...c, emoji: c.kind === 'social' ? SOCIAL.find(a => a.id === c.action)?.emoji : c.kind === 'go' ? '👣' : TYPES[g.objects.find(o => o.id === c.obj)?.type]?.actions ? (actionEmoji(c)) : '•' }))].filter(Boolean);
-  $('#panel').innerHTML = `<div class="who"><b>${esc(s.name)}</b><span>${moodText(mood(s))}</span>
-      <small>${s.atWork ? `💼 Al lavoro fino alle ${job.end}:00` : job ? `${job.emoji} ${esc(job.titles[s.job.level])} · ${job.start}-${job.end}` : 'Disoccupato: cerca lavoro al computer o con 💼'}</small></div>
-    <div class="queue">${q.length ? q.map((c, i) => `<button class="qi ${i === 0 && s.cur ? 'now' : ''}" data-cancel="${i}" title="Tocca per annullare">${c.emoji ?? '•'}</button>`).join('') : '<small>Nessuna azione: tocca un oggetto</small>'}</div>
+  const doing = s.atWork ? `💼 Al lavoro fino alle ${job.end}:00` : s.cur ? `${s.cur.emoji ?? ''} ${s.cur.state === 'walk' && s.cur.id !== 'go' ? 'Sta andando a: ' : ''}${s.cur.label}` : 'Libero: tocca un oggetto o il pavimento';
+  const goal = currentGoal(g);
+  $('#goal').hidden = !goal;
+  if (goal) $('#goal').innerHTML = `<span>🎯</span><span><b>${esc(goal.text)}</b><small>${esc(goal.hint)}</small></span><em>+${goal.reward} €</em>`;
+  $('#panel').innerHTML = `<div class="who" data-mini><b>${esc(s.name)}</b><span>${moodText(mood(s))}</span><i class="fold">${mini ? '▲' : '▼'}</i>
+      <small>${job ? `${job.emoji} ${esc(job.titles[s.job.level])} · ${job.start}-${job.end}` : 'Disoccupat' + oa(s) + ': trova lavoro con 💼'}</small></div>
+    <div class="doing">${esc(doing)}</div>
+    <div class="queue">${q.length ? q.map((c, i) => `<button class="qi ${i === 0 && s.cur ? 'now' : ''}" data-cancel="${i}" title="Tocca per annullare">${c.emoji ?? '•'}</button>`).join('') + '<small>tocca un\'icona per annullarla</small>' : ''}</div>
+    ${s.wishes?.length ? `<div class="wishes">⭐ ${s.wishes.map(id => { const wi = WISHES.find(x => x.id === id); return `<span>${wi.emoji} ${esc(wi.text)}</span>`; }).join('')}</div>` : ''}
     <div class="needs">${NEEDS.map(([k, e, l]) => `<div class="need" title="${l}"><span>${e}</span><div class="bar"><i style="width:${s.needs[k]}%;background:hsl(${Math.round(s.needs[k] * 1.2)},70%,45%)"></i></div></div>`).join('')}</div>
     <div class="rel"><span>❤️ ${esc(g.sims[0].name)} e ${esc(g.sims[1].name)}</span><div class="bar"><i style="width:${g.rel}%"></i></div></div>`;
 }
@@ -351,6 +379,7 @@ function confirmPlace() {
     g.objects.push({ id: Math.random().toString(36).slice(2, 9), type: p.type, x: p.x, y: p.y, rot: p.rot, color: p.color });
     g.money -= TYPES[p.type].price;
     toast(`Comprato: ${TYPES[p.type].name}`);
+    gameEvent(g, null, 'buy', notify);
   }
   build.placing = null;
   save();
@@ -370,6 +399,18 @@ function jobsSheet(simId = sel) {
     ${Object.entries(CAREERS).map(([id, c]) => `<button class="row" data-job="${id}" data-sim="${s.id}"><span>${c.emoji}</span><span><b>${c.name}</b>
       <small>${c.start}:00-${c.end}:00 · ${c.days.length} giorni a settimana · da ${c.pay[0]} € l'ora${c.skill ? ` · conta l'abilità ${c.skill}` : ''}</small></span></button>`).join('')}
     <p class="note">Abilità: 🍳 cucina ${s.skills.cucina.toFixed(1)} · 🏃 fitness ${s.skills.fitness.toFixed(1)} (su 10)</p>`;
+  if (!sheet.open) sheet.showModal();
+}
+
+// ---------------------------------------------------------------- obiettivi e desideri
+function goalsSheet() {
+  sheet.innerHTML = `<div class="sheet-head"><h2>🎯 Obiettivi</h2><button class="icon" data-close>✕</button></div>
+    <p class="note">Una piccola guida per cominciare: ogni obiettivo completato vale soldi per arredare casa.</p>
+    ${GOALS.map(gl => { const done = g.goals.done.includes(gl.key); return `<div class="row goal-row ${done ? 'done' : ''}"><span>${done ? '✅' : '⬜'}</span>
+      <span><b>${esc(gl.text)}</b><small>${esc(gl.hint)}</small></span><em>+${gl.reward} €</em></div>`; }).join('')}
+    <h3>⭐ Desideri di oggi</h3>
+    <p class="note">Ognuno ha due desideri al giorno: esaudirli dà ${80} € e buonumore. Domani ne arrivano di nuovi.</p>
+    ${g.sims.map(s => `<p><b>${esc(s.name)}</b>: ${s.wishes?.length ? s.wishes.map(id => { const wi = WISHES.find(x => x.id === id); return `${wi.emoji} ${esc(wi.text)}`; }).join(' · ') : 'tutti esauditi! 🎉'}</p>`).join('')}`;
   if (!sheet.open) sheet.showModal();
 }
 
@@ -419,6 +460,13 @@ document.addEventListener('click', async e => {
   const mi = t.closest('[data-mi]');
   if (mi) { const it = $('#menu')._items[+mi.dataset.mi]; closeMenu(); it.run(); hud(); return; }
   if (t.closest('[data-close]')) { sheet.close(); return; }
+  if (t.closest('[data-goals]')) return goalsSheet();
+  if (t.closest('[data-mini]')) {
+    mini = !mini;
+    try { localStorage.setItem('mini', mini ? '1' : '0'); } catch { /* niente */ }
+    hud();
+    return;
+  }
   const sp = t.closest('[data-speed]');
   if (sp) { g.speed = +sp.dataset.speed; hud(); return; }
   const se = t.closest('[data-sel]');
@@ -449,6 +497,7 @@ document.addEventListener('click', async e => {
     s.job = { career: job.dataset.job, level: 0, perf: 0, days: 0 };
     const c = CAREERS[s.job.career];
     toast(`${s.name} è stat${oa(s)} assunt${oa(s)}: ${c.titles[0]}! Si comincia alle ${c.start}:00.`);
+    gameEvent(g, s, 'job', notify);
     sheet.close();
     save();
     hud();
@@ -539,7 +588,7 @@ addEventListener('resize', () => { resize(); });
 resize();
 const saved = await getSetting('save', null);
 if (saved) {
-  g = saved;
+  g = migrate(saved);
   relink();
   v.z = w < 500 ? 0.8 : 1;   // sul telefono un po' più da lontano, per vedere quasi tutta la casa
   centerOn(g.W / 2, g.H / 2);

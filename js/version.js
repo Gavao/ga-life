@@ -1,2 +1,2 @@
 // Versione dei contenuti dell'app: la aggiorna tools/publish.ps1 a ogni pubblicazione, insieme a version.txt.
-export const APP_VERSION = '2026.10.21-1324';
+export const APP_VERSION = '2026.10.22-0908';

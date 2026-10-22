@@ -24,9 +24,7 @@ export const CAREERS = {
 // ---------------------------------------------------------------- partita nuova
 export function newGame(simsInfo) {
   const W = 12, H = 10;
-  // Pavimenti: bagno (piastrelle azzurre), cucina (piastrelle chiare), resto parquet
-  const floors = [];
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) floors.push(x < 3 && y < 4 ? 'bagno' : x >= 8 && y < 4 ? 'cucina' : 'legno');
+  const floors = defaultFloors(W, H);
   const o = (type, x, y, rot = 0, color) => ({ id: Math.random().toString(36).slice(2, 9), type, x, y, rot, color });
   const objects = [
     o('letto', 4, 0, 0, '#60a5fa'), o('lampada', 6, 0), o('pianta', 3, 0),
@@ -38,9 +36,63 @@ export function newGame(simsInfo) {
     id: i, name: s.name, gender: s.gender, look: s.look,
     needs: { fame: 70, energia: 80, igiene: 75, vescica: 70, svago: 60, socialita: 65 },
     x: 6.5 + i, y: 8.5, path: [], queue: [], cur: null, face: 1, walk: 0,
-    skills: { cucina: 0, fitness: 0 }, job: null, atWork: false, alerted: {}, idle: 0,
+    skills: { cucina: 0, fitness: 0 }, job: null, atWork: false, alerted: {}, idle: 0, wishes: [],
   }));
-  return { v: 1, day: 0, minute: 8 * 60, money: 1500, speed: 1, W, H, floors, objects, sims, rel: 60, bills: 7, auto: true };
+  const g = { v: 2, day: 0, minute: 8 * 60, money: 1500, speed: 1, W, H, floors, walls: defaultWalls(), objects, sims, rel: 60, bills: 7, auto: true,
+    wishDay: -1, goals: { done: [] } };
+  rollWishes(g);
+  return g;
+}
+
+// Stanze: bagno (in alto a sinistra), camera (al centro), cucina (a destra, aperta sul soggiorno), soggiorno sotto.
+function defaultFloors(W, H) {
+  const floors = [];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) floors.push(y >= 4 ? 'legno' : x < 3 ? 'bagno' : x < 8 ? 'camera' : 'cucina');
+  }
+  return floors;
+}
+/**
+ * Muri interni, sulle linee tra le caselle: { v: x, y0, y1 } è un muro sulla linea x tra le righe y0 e y1;
+ * { h: y, x0, x1 } è un muro sulla linea y tra le colonne x0 e x1. Le porte sono i buchi.
+ */
+function defaultWalls() {
+  return [
+    { v: 3, y0: 0, y1: 4 },                            // bagno | camera
+    { h: 4, x0: 0, x1: 1 }, { h: 4, x0: 2, x1: 3 },    // bagno | soggiorno (porta in x = 1)
+    { v: 8, y0: 0, y1: 4 },                            // camera | cucina
+    { h: 4, x0: 3, x1: 5 }, { h: 4, x0: 6, x1: 8 },    // camera | soggiorno (porta in x = 5)
+  ];
+}
+/** Partite create prima delle stanze: si aggiungono muri e pavimenti di base. */
+export function migrate(g) {
+  if (!g.walls) {
+    g.walls = defaultWalls();
+    g.floors = defaultFloors(g.W, g.H);
+    g.v = 2;
+  }
+  g.wishDay ??= -1;
+  g.goals ??= { done: [] };
+  for (const s of g.sims) s.wishes ??= [];
+  rollWishes(g);
+  return g;
+}
+
+/** Caselle separate da un muro (solo tra caselle vicine in orizzontale o verticale). */
+export function wallBetween(g, x1, y1, x2, y2) {
+  for (const w of g.walls ?? []) {
+    if (w.v != null && y1 === y2 && Math.max(x1, x2) === w.v && Math.min(x1, x2) === w.v - 1 && y1 >= w.y0 && y1 < w.y1) return true;
+    if (w.h != null && x1 === x2 && Math.max(y1, y2) === w.h && Math.min(y1, y2) === w.h - 1 && x1 >= w.x0 && x1 < w.x1) return true;
+  }
+  return false;
+}
+/** Un oggetto non può stare a cavallo di un muro. */
+function crossesWall(g, f) {
+  for (const w of g.walls ?? []) {
+    if (w.v != null && w.v > f.x && w.v < f.x + f.w && w.y0 < f.y + f.d && w.y1 > f.y) return true;
+    if (w.h != null && w.h > f.y && w.h < f.y + f.d && w.x0 < f.x + f.w && w.x1 > f.x) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------- utilità
@@ -68,6 +120,7 @@ function blocked(g) {
 export function canPlace(g, o, ignoreId = null) {
   const f = footprint(o);
   if (f.x < 0 || f.y < 0 || f.x + f.w > g.W || f.y + f.d > g.H) return false;
+  if (crossesWall(g, f)) return false;
   if (TYPES[o.type].passable) return true;
   for (const q of g.objects) {
     if (q.id === ignoreId || TYPES[q.type].passable) continue;
@@ -98,6 +151,9 @@ function findPath(g, sx, sy, goals) {
       const nx = x + dx, ny = y + dy, nk = `${nx},${ny}`;
       if (prev.has(nk) || !free(nx, ny)) continue;
       if (dx && dy && (!free(x + dx, y) || !free(x, y + dy))) continue;
+      // Muri: in diagonale bisogna poter passare da entrambi i lati
+      if (!dx || !dy ? wallBetween(g, x, y, nx, ny)
+        : wallBetween(g, x, y, x + dx, y) || wallBetween(g, x + dx, y, nx, ny) || wallBetween(g, x, y, x, y + dy) || wallBetween(g, x, y + dy, nx, ny)) continue;
       prev.set(nk, key);
       queue.push([nx, ny]);
     }
@@ -108,18 +164,17 @@ function findPath(g, sx, sy, goals) {
 /** Caselle da cui si usa un oggetto: davanti prima, poi tutte quelle intorno. */
 function useTiles(g, o) {
   const f = footprint(o);
+  // [casella da cui si usa, casella dell'oggetto accanto]: tra le due non deve esserci un muro
   const front = [];
-  if (o.rot === 0) for (let x = f.x; x < f.x + f.w; x++) front.push([x, f.y + f.d]);
-  if (o.rot === 1) for (let y = f.y; y < f.y + f.d; y++) front.push([f.x + f.w, y]);
-  if (o.rot === 2) for (let x = f.x; x < f.x + f.w; x++) front.push([x, f.y - 1]);
-  if (o.rot === 3) for (let y = f.y; y < f.y + f.d; y++) front.push([f.x - 1, y]);
+  if (o.rot === 0) for (let x = f.x; x < f.x + f.w; x++) front.push([x, f.y + f.d, x, f.y + f.d - 1]);
+  if (o.rot === 1) for (let y = f.y; y < f.y + f.d; y++) front.push([f.x + f.w, y, f.x + f.w - 1, y]);
+  if (o.rot === 2) for (let x = f.x; x < f.x + f.w; x++) front.push([x, f.y - 1, x, f.y]);
+  if (o.rot === 3) for (let y = f.y; y < f.y + f.d; y++) front.push([f.x - 1, y, f.x, y]);
   const around = [];
-  for (let x = f.x - 1; x <= f.x + f.w; x++) for (let y = f.y - 1; y <= f.y + f.d; y++) {
-    if (x >= f.x && x < f.x + f.w && y >= f.y && y < f.y + f.d) continue;
-    around.push([x, y]);
-  }
+  for (let x = f.x; x < f.x + f.w; x++) { around.push([x, f.y - 1, x, f.y], [x, f.y + f.d, x, f.y + f.d - 1]); }
+  for (let y = f.y; y < f.y + f.d; y++) { around.push([f.x - 1, y, f.x, y], [f.x + f.w, y, f.x + f.w - 1, y]); }
   const block = blocked(g);
-  const ok = ([x, y]) => x >= 0 && y >= 0 && x < g.W && y < g.H && !block.has(`${x},${y}`);
+  const ok = ([x, y, ox, oy]) => x >= 0 && y >= 0 && x < g.W && y < g.H && !block.has(`${x},${y}`) && !wallBetween(g, x, y, ox, oy);
   const f1 = front.filter(ok);
   return f1.length ? f1 : around.filter(ok);
 }
@@ -140,6 +195,7 @@ export function cancel(sim, i) {
 function stopCur(sim, g = null) {
   const c = sim.cur;
   if (c?.obj) freeObject(c);
+  if (c?.from) { sim.x = c.from[0]; sim.y = c.from[1]; }   // si alza dal letto, dal divano…
   if (c?.partner && g) { const p = g.sims.find(s => s.id === c.partner); if (p?.cur?.partner === sim.id) p.cur = null; }
   sim.cur = null;
   sim.path = [];
@@ -178,6 +234,62 @@ function newDay(g, notify) {
     g.money -= amount;
     g.bills = g.day + 7;
     notify(`🧾 Bollette pagate: ${amount} €${g.money < 0 ? ' · siete in rosso!' : ''}`);
+  }
+  rollWishes(g);
+}
+
+// ---------------------------------------------------------------- desideri del giorno e guida iniziale
+export const WISHES = [
+  { id: 'tv', text: 'Guardare la TV', emoji: '📺' }, { id: 'cucina', text: 'Cucinare un pasto', emoji: '🍳' },
+  { id: 'doccia', text: 'Fare una doccia', emoji: '🚿' }, { id: 'gioca', text: 'Giocare al computer', emoji: '🎮' },
+  { id: 'social', text: 'Chattare con gli amici', emoji: '📱' }, { id: 'leggi', text: 'Leggere un libro', emoji: '📖' },
+  { id: 'balla', text: 'Ballare con lo stereo', emoji: '💃' }, { id: 'allenati', text: 'Allenarsi', emoji: '🏃' },
+  { id: 'pisolino', text: 'Fare un pisolino', emoji: '😴' }, { id: 'abbraccia', text: 'Un abbraccio', emoji: '🤗' },
+  { id: 'bacia', text: 'Un bacio', emoji: '💋' }, { id: 'chiacchiera', text: 'Chiacchierare un po\'', emoji: '💬' },
+  { id: 'scherza', text: 'Ridere insieme', emoji: '😂' }, { id: 'balliamo', text: 'Ballare insieme', emoji: '💃' },
+  { id: 'buy', text: 'Comprare qualcosa di nuovo', emoji: '🛍️' },
+];
+const WISH_REWARD = 80;
+
+/** Due desideri al giorno per ciascuno, tra quelli possibili con gli oggetti che avete (più qualche acquisto). */
+export function rollWishes(g) {
+  if (g.wishDay === g.day) return;
+  g.wishDay = g.day;
+  const have = new Set(g.objects.flatMap(o => TYPES[o.type].actions));
+  const possible = WISHES.filter(w => have.has(w.id) || SOCIAL.some(a => a.id === w.id) || w.id === 'buy' || Math.random() < 0.25);
+  for (const s of g.sims) {
+    const pool = [...possible].sort(() => Math.random() - 0.5);
+    s.wishes = pool.slice(0, 2).map(w => w.id);
+  }
+}
+
+export const GOALS = [
+  { key: 'doccia', text: 'Fai fare una doccia', hint: 'Tocca la doccia nel bagno e scegli "Fai la doccia"', reward: 100 },
+  { key: 'cucina', text: 'Cucina un pasto', hint: 'Tocca i fornelli in cucina: dopo si mangia al tavolo', reward: 100 },
+  { key: 'job', text: 'Trova un lavoro', hint: 'Tocca 💼 Lavoro in basso e scegli un\'offerta', reward: 150 },
+  { key: 'chiacchiera', text: 'Fate due chiacchiere', hint: 'Tocca l\'altro Sim e scegli "Chiacchiera"', reward: 100 },
+  { key: 'buy', text: 'Compra un mobile nuovo', hint: 'Tocca 🛋️ Arreda, scegli un oggetto e mettilo in casa', reward: 100 },
+  { key: 'dormi', text: 'Andate a dormire insieme', hint: 'La sera tocca il letto in camera e scegli "Dormi" per tutti e due', reward: 100 },
+  { key: 'promo', text: 'Ottieni una promozione', hint: 'Andate al lavoro di buon umore: bisogni alti, rombo verde', reward: 300 },
+];
+export const currentGoal = g => GOALS.find(x => !g.goals.done.includes(x.key));
+
+/** Qualcosa è successo (azione finita, acquisto, assunzione, promozione): desideri e obiettivi. */
+export function gameEvent(g, sim, key, notify) {
+  const gl = GOALS.find(x => x.key === key);
+  if (gl && !g.goals.done.includes(key)) {
+    g.goals.done.push(key);
+    g.money += gl.reward;
+    notify(`🎯 Obiettivo completato: ${gl.text}! +${gl.reward} €`);
+  }
+  for (const s of sim ? [sim] : g.sims) {
+    const i = s.wishes?.indexOf(key) ?? -1;
+    if (i < 0) continue;
+    s.wishes.splice(i, 1);
+    g.money += WISH_REWARD;
+    s.needs.svago = clamp(s.needs.svago + 15, 0, 100);
+    notify(`⭐ Desiderio di ${s.name} esaudito: ${WISHES.find(w => w.id === key).text}! +${WISH_REWARD} €`);
+    break;
   }
 }
 
@@ -260,6 +372,7 @@ function backFromWork(g, sim, job, notify) {
     sim.job.level++;
     sim.job.perf = 0;
     text = `🎉 ${sim.name} è stat${oa(sim)} promoss${oa(sim)}: ${job.titles[sim.job.level]}! (+${pay} €)`;
+    gameEvent(g, sim, 'promo', notify);
   } else if (sim.job.perf < -60) {
     sim.job.perf = -60;
     text += ' · il capo dice che deve arrivare più di buon umore';
@@ -381,6 +494,7 @@ function doStep(g, sim, dt, notify) {
     if (Math.random() < 0.12 - sim.skills.cucina * 0.01) notify(`🔥 ${sim.name} ha bruciato un po' il pasto… si mangia lo stesso.`);
   }
   if (c.special === 'jobs') notify('__jobs__' + sim.id);
+  if (c.id === 'dormi' ? g.sims.every(s => s === sim || s.cur?.id === 'dormi') : true) gameEvent(g, sim, c.id, notify);
   const then = c.then;
   const from = c.from;
   freeObject(c);
