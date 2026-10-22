@@ -353,6 +353,19 @@ const BUILD = {
     const top = b.cyl(0.5, 0.5, 0.35, 0.5, '#facc15', 1.1, { emissive: '#f59e0b' }); top.rotation.x = Math.PI / 2; top.position.y = 1.1; top.scale.set(0.35, 0.5, 0.35);
     b.box(0.5, 0.76, 0.5, 0.02, 0.4, '#38bdf8', 0.5, { emissive: '#0ea5e9' });
   },
+  tavoloRistorante: b => {
+    b.m('tableCloth', { w: 1.5, d: 1.0, smax: 2, tint: '#f8fafc' });
+    b.m('chairCushion', { x: 1, z: 0.3, s: 1.9, ry: 2, tint: '#991b1b' });
+    b.m('chairCushion', { x: 1, z: 1.7, s: 1.9, tint: '#991b1b' });
+    b.cyl(1, 1, 0.04, 0.12, '#fef3c7', 0.55, { emissive: '#fde68a' });
+    b.cyl(0.75, 1, 0.12, 0.015, '#ffffff', 0.55); b.cyl(1.25, 1, 0.12, 0.015, '#ffffff', 0.55);
+  },
+  banconeBar: b => {
+    b.box(1, 0.35, 1.9, 0.6, 1.0, '#3f2a1d');
+    b.box(1, 0.35, 2.0, 0.7, 0.06, '#d6d3d1', 1.0, { rough: 0.3 });
+    for (const [x, c] of [[0.3, '#16a34a'], [0.55, '#b45309'], [1.5, '#7c3aed'], [1.7, '#dc2626']]) b.cyl(x, 0.25, 0.045, 0.3, c, 1.06, { opacity: 0.85 });
+    for (const x of [0.5, 1.5]) b.m('stoolBar', { x, z: 0.85, s: 1.6 });
+  },
   pizza: b => { b.box(0.5, 0.5, 0.5, 0.5, 0.06, '#d6a35c'); b.cyl(0.5, 0.5, 0.21, 0.02, '#f59e0b', 0.06); b.cyl(0.5, 0.5, 0.17, 0.01, '#dc2626', 0.08); },
 };
 function car(b, suv) {
@@ -847,7 +860,7 @@ export function createWorld(canvas, FLOORS) {
     sun.target.position.set(cam.tx, 0, cam.tz);
     sun.intensity = 0.25 + 2.5 * day;
     sun.color.set(dusk > 0.3 ? '#ffd2a1' : '#fff4e0');
-    hemi.intensity = 0.55 + 0.95 * day;
+    hemi.intensity = 0.8 + 0.7 * day;
     hemi.color.set(day > 0.15 ? '#ffffff' : '#8ea2ff');
     // Lampade (e fuoco): poche luci, sugli oggetti più vicini al centro della vista
     lampT -= dt;
@@ -984,6 +997,7 @@ export function createWorld(canvas, FLOORS) {
       syncDishes(g, viewLv);
       syncEffects(g, viewLv, performance.now() / 1000);
       for (const s of g.sims) { const r = simRec(s); if (r) updateSim(g, s, r, dt, viewLv); }
+      for (const [id, r] of sims) if (!g.sims.some(s => s.id === id)) { simRoot.remove(r.root); sims.delete(id); }   // chi è andato via
       const sel = sims.get(st.sel), ss = g.sims[st.sel];
       plumbob.visible = !!sel && sel.root.visible && !st.build && ss?.pose !== 'lie';
       if (plumbob.visible) {

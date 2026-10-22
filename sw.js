@@ -1,8 +1,8 @@
 // Service worker: l'app si apre e funziona anche senza rete (la partita è salvata nel telefono).
-const SHELL = 'shell-v2';
+const SHELL = 'shell-v3';
 const FILES = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest',
-  'js/app.js', 'js/db.js', 'js/iso.js', 'js/catalog.js', 'js/game.js', 'js/world3d.js', 'js/version.js',
+  'js/app.js', 'js/db.js', 'js/iso.js', 'js/catalog.js', 'js/game.js', 'js/town.js', 'js/world3d.js', 'js/version.js',
   'icons/icon-192.png', 'icons/icon-512.png',
 ];
 const CDN = 'https://cdn.jsdelivr.net/npm/three@0.160.0/';   // Three.js: versione fissa, si tiene in copia

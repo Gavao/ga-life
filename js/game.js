@@ -97,6 +97,7 @@ export function newGame(simsInfo) {
     v: 4, day: 0, minute: 8 * 60, money: 2000, speed: 1, W, H, objects, sims,
     levels: { '-1': emptyLevel(W, H), 0: { floors: defaultFloors(W, H), walls: defaultHouse() }, 1: emptyLevel(W, H) },
     rel: 60, bills: 7, bill: null, power: true, auto: true, wishDay: -1, goals: { done: [] }, dishes: [], exit: [DOOR_X, H - 1],
+    town: newTown(),
   };
   rollWishes(g);
   return g;
@@ -143,6 +144,8 @@ export function migrate(g) {
     if (canPlace(g, box)) g.objects.push(box);
     g.v = 4;
   }
+  g.town ??= newTown();
+  for (const o of g.town.home?.objects ?? []) o.users = [];
   g.dishes ??= [];
   for (const d of g.dishes) d.lv ??= 0;
   g.power ??= true;
@@ -165,7 +168,53 @@ export function migrate(g) {
 export const timeText = g => `${String(Math.floor(g.minute / 60)).padStart(2, '0')}:${String(Math.floor(g.minute % 60)).padStart(2, '0')}`;
 export const dayText = g => `${DAYS[g.day % 7]} · giorno ${g.day + 1}`;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const other = (g, sim) => g.sims.find(s => s !== sim);
+const other = (g, sim) => g.sims.find(s => s !== sim && !s.npc);   // l'altro della coppia
+/** Oggetti di casa vostra (anche quando siete fuori, in città). */
+export const homeObjects = g => (g.town?.at ? g.town.home.objects : g.objects);
+
+// ---------------------------------------------------------------- gente della città e amici
+/** Un Sim "non giocabile": un abitante della città, al parco o in visita a casa vostra. */
+export function makeNpc(p, x, y, extra = {}) {
+  const r = () => 45 + Math.random() * 45;
+  return {
+    id: 'n' + p.key, key: p.key, npc: true, name: p.name, gender: p.gender, look: { model: p.model },
+    needs: { fame: r(), energia: r(), igiene: r(), vescica: r(), svago: r(), socialita: r() },
+    x, y, lv: 0, path: [], queue: [], cur: null, face: 1, walk: 0, skills: {}, job: null, atWork: false, alerted: {}, idle: Math.random() * 6,
+    wishes: [], moodlets: [], ...extra,
+  };
+}
+/** Amicizia tra due Sim: per la coppia è il rapporto, con gli altri l'amicizia (0-100). */
+export function relOf(g, a, b) {
+  const n = a.npc ? a : b.npc ? b : null;
+  if (!n) return g.rel;
+  if (a.npc && b.npc) return 50;
+  return g.town.friends[n.key]?.rel ?? 0;
+}
+function addRel(g, a, b, v, notify) {
+  const n = a.npc ? a : b.npc ? b : null;
+  if (!n) { g.rel = clamp(g.rel + v, 0, 100); return; }
+  if (a.npc && b.npc) return;
+  const f = (g.town.friends[n.key] ??= { name: n.name, gender: n.gender, model: n.look.model, rel: 0 });
+  const before = f.rel;
+  f.rel = clamp(f.rel + v, 0, 100);
+  const you = a.npc ? b : a;
+  if (before < 30 && f.rel >= 30) {
+    notify(`🤝 ${you.name} e ${n.name} sono diventati amici! Potete invitar${n.gender === 'lei' ? 'la' : 'lo'} a casa dal telefono (tocca il tuo Sim).`);
+    gameEvent(g, you, 'amico', notify);
+  }
+  if (before < 70 && f.rel >= 70) notify(`💛 ${n.name} adesso è un${n.gender === 'lei' ? '\'' : 'o'} amic${n.gender === 'lei' ? 'a' : 'o'} del cuore!`);
+}
+/** Un amico che è venuto a trovarvi se ne va: cammina fino alla strada e sparisce. */
+function sendAway(g, sim, notify) {
+  stopCur(sim, g);
+  sim.queue = [];
+  sim.leaving = true;
+  notify(`👋 ${sim.name} vi saluta e torna a casa.`);
+  const path = findPath(g, sim, [[...exitTile(g), 0]]);
+  if (!path) { sim.gone = true; return; }
+  sim.cur = { id: 'vaiVia', label: 'Torna a casa', emoji: '👋', state: 'walk', simId: sim.id };
+  sim.path = path;
+}
 const now = g => g.day * 1440 + g.minute;
 export const oa = sim => (sim.gender === 'lei' ? 'a' : 'o');   // andato/andata
 
@@ -373,20 +422,25 @@ export function tick(g, min, notify) {
     const before = g.minute;
     g.minute += step;
     if (g.minute >= 24 * 60) { g.minute -= 24 * 60; g.day++; newDay(g, notify); }
-    if (before < 3 * 60 && g.minute >= 3 * 60) burglar(g, notify);
-    if (g.pizzaAt && now(g) >= g.pizzaAt) deliverPizza(g, notify);
-    fires(g, step, notify);
-    for (const sim of g.sims) simStep(g, sim, step, before, notify);
+    const home = !g.town?.at;   // fuori casa: niente ladri, pizza o incendi (la casa vi aspetta)
+    if (home && before < 3 * 60 && g.minute >= 3 * 60) burglar(g, notify);
+    if (home && g.pizzaAt && now(g) >= g.pizzaAt) deliverPizza(g, notify);
+    if (home) fires(g, step, notify);
+    for (const sim of g.sims) {
+      if (sim.npc && sim.leaveAt && !sim.leaving && now(g) >= sim.leaveAt) sendAway(g, sim, notify);
+      simStep(g, sim, step, before, notify);
+    }
+    if (g.sims.some(s => s.gone)) g.sims = g.sims.filter(s => !s.gone);
     g.rel = clamp(g.rel - step / (60 * 24) * 1.5, 0, 100);   // il rapporto cala piano se vi ignorate
   }
 }
 
 function newDay(g, notify) {
   if (g.day >= g.bills) {   // il lunedì arriva la posta con le bollette
-    const value = g.objects.reduce((a, o) => a + TYPES[o.type].price, 0);
+    const value = homeObjects(g).reduce((a, o) => a + TYPES[o.type].price, 0);
     const amount = Math.round(60 + value * 0.015) + (g.bill?.amount ?? 0);
     g.bills = g.day + 7;
-    if (!g.objects.some(o => TYPES[o.type].mailbox)) {   // senza cassetta della posta si pagano da sole
+    if (!homeObjects(g).some(o => TYPES[o.type].mailbox)) {   // senza cassetta della posta si pagano da sole
       g.money -= amount;
       notify(`🧾 Bollette pagate: ${amount} €${g.money < 0 ? ' · siete in rosso!' : ''}`);
     } else {
@@ -455,6 +509,8 @@ export const WISHES = [
   { id: 'sparecchia', text: 'Rimettere in ordine la cucina', emoji: '🍽️' }, { id: 'mangiaPizza', text: 'Mangiare una pizza', emoji: '🍕' },
   { id: 'biliardo', text: 'Giocare a biliardo', emoji: '🎱' }, { id: 'drink', text: 'Un drink al bancone', emoji: '🍹' },
   { id: 'lavoretti', text: 'Fare qualche lavoretto', emoji: '🔨' }, { id: 'pulisci', text: 'Fare le pulizie', emoji: '🧽' },
+  { id: 'citta', text: 'Uscire in città', emoji: '🗺️' }, { id: 'amico', text: 'Farsi un nuovo amico', emoji: '🤝' },
+  { id: 'cena', text: 'Cenare al ristorante', emoji: '🍝' }, { id: 'aperitivo', text: 'Un aperitivo al locale', emoji: '🍸' },
 ];
 const WISH_REWARD = 80;
 
@@ -463,9 +519,9 @@ export function rollWishes(g) {
   if (g.wishDay === g.day) return;
   g.wishDay = g.day;
   const have = new Set(g.objects.flatMap(o => TYPES[o.type].actions));
-  const always = ['buy', 'sparecchia', 'mangiaPizza', 'pulisci'];
+  const always = ['buy', 'sparecchia', 'mangiaPizza', 'pulisci', 'citta', 'amico', 'cena', 'aperitivo'];
   const possible = WISHES.filter(w => have.has(w.id) || SOCIAL.some(a => a.id === w.id) || always.includes(w.id) || Math.random() < 0.15);
-  for (const s of g.sims) s.wishes = [...possible].sort(() => Math.random() - 0.5).slice(0, 2).map(w => w.id);
+  for (const s of g.sims) if (!s.npc) s.wishes = [...possible].sort(() => Math.random() - 0.5).slice(0, 2).map(w => w.id);
 }
 
 export const GOALS = [
@@ -479,6 +535,9 @@ export const GOALS = [
   { key: 'wall', text: 'Costruisci una stanza nuova', hint: 'Arreda → Costruisci → Muro: trascina il dito per tirare i muri', reward: 200 },
   { key: 'stairs', text: 'Costruisci un piano nuovo', hint: 'Compra → Casa → Scala; poi col pulsante ▲▼ vai al piano e posa il pavimento', reward: 250 },
   { key: 'dormi', text: 'Andate a dormire insieme', hint: 'La sera tocca il letto in camera e scegli "Dormi" per tutti e due', reward: 100 },
+  { key: 'citta', text: 'Uscite in città', hint: 'Tocca 🗺️ Città in basso e scegliete un posto: parco, palestra, ristorante…', reward: 150 },
+  { key: 'amico', text: 'Fatevi un amico', hint: 'In città tocca qualcuno e chiacchierate finché diventate amici', reward: 200 },
+  { key: 'invito', text: 'Invitate un amico a casa', hint: 'Tocca il tuo Sim (il telefono) e scegli "Invita a casa"', reward: 150 },
   { key: 'promo', text: 'Ottieni una promozione', hint: 'Andate al lavoro di buon umore: bisogni alti, casa bella', reward: 300 },
 ];
 export const currentGoal = g => GOALS.find(x => !g.goals.done.includes(x.key));
@@ -518,11 +577,12 @@ function simStep(g, sim, dt, before, notify) {
     sim.needs[k] = clamp(sim.needs[k] - (decay[k] * slow * dt) / 60, 0, 100);
   }
   if (sim.atWork) return;
-  const leaving = sim.cur?.id === 'vaiLavoro';
+  const leaving = sim.cur?.id === 'vaiLavoro' || sim.leaving;
+  if (sim.npc) for (const [k] of NEEDS) sim.needs[k] = Math.max(sim.needs[k], 13);   // la gente della città se la cava da sola
 
   // Incendio in casa: chi è libero (o sta facendo altro) corre a spegnerlo
   const burning = g.objects.find(o => o.fire);
-  if (burning && !leaving && sim.cur?.id !== 'spegni' && !sim.queue.some(c => c.action === 'spegni') && !g.sims.some(s => s !== sim && (s.cur?.id === 'spegni' || s.queue.some(c => c.action === 'spegni')))) {
+  if (burning && !sim.npc && !leaving && sim.cur?.id !== 'spegni' && !sim.queue.some(c => c.action === 'spegni') && !g.sims.some(s => s !== sim && (s.cur?.id === 'spegni' || s.queue.some(c => c.action === 'spegni')))) {
     stopCur(sim, g);
     sim.queue.unshift({ kind: 'obj', obj: burning.id, action: 'spegni', by: 'auto' });
   }
@@ -547,14 +607,14 @@ function simStep(g, sim, dt, before, notify) {
     notify(`😵 ${sim.name} è crollat${oa(sim)} dal sonno sul pavimento!`);
   }
   for (const [k, , label] of NEEDS) {
-    if (sim.needs[k] < 20 && !sim.alerted[k]) { sim.alerted[k] = true; notify(`${sim.name}: ${label.toLowerCase()} bassa!`); }
+    if (sim.needs[k] < 20 && !sim.alerted[k] && !sim.npc) { sim.alerted[k] = true; notify(`${sim.name}: ${label.toLowerCase()} bassa!`); }
     if (sim.needs[k] > 40) sim.alerted[k] = false;
   }
 
   if (!sim.cur && sim.queue.length) startNext(g, sim, notify);
   if (!sim.cur) {
     sim.idle += dt;
-    if (g.auto && sim.idle > 6) autonomy(g, sim);
+    if ((g.auto || sim.npc) && !sim.leaving && sim.idle > 6) autonomy(g, sim);
     return;
   }
   const c = sim.cur;
@@ -595,7 +655,7 @@ function backFromWork(g, sim, job, notify) {
     sim.job.perf = -60;
     text += ' · il capo dice che deve arrivare più di buon umore';
   }
-  const car = sim.car && g.objects.find(o => o.id === sim.car);
+  const car = sim.car && homeObjects(g).find(o => o.id === sim.car);
   sim.lv = 0;
   if (car) {   // torna con l'auto: scende accanto
     car.inUse = null;
@@ -631,8 +691,9 @@ function startNext(g, sim, notify) {
     return;
   }
   if (cmd.kind === 'social') {
-    const p = other(g, sim);
+    const p = cmd.partner != null ? g.sims.find(s => s.id === cmd.partner) : other(g, sim);
     const a = SOCIAL.find(x => x.id === cmd.action);
+    if (!p || p.leaving) return;
     if (p.atWork || p.cur?.id === 'vaiLavoro') return say(`${p.name} è al lavoro.`);
     const goals = [];
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) goals.push([Math.floor(p.x) + dx, Math.floor(p.y) + dy, p.lv]);
@@ -657,7 +718,7 @@ function startNext(g, sim, notify) {
   if (needSeat && seats.length) {
     seat = seats.findIndex((_, i) => !o.users.some(u => u.seat === i));
     if (seat < 0) return say(`${T.name}: è occupato.`);
-  } else if (o.users.length && !seats.length) return say(`${T.name}: lo sta usando ${other(g, sim).name}.`);
+  } else if (o.users.length && !seats.length) return say(`${T.name}: lo sta usando ${g.sims.find(s => s.id === o.users[0].sim)?.name ?? 'qualcun altro'}.`);
   const path = findPath(g, sim, useTiles(g, o));
   if (!path) return say(`${sim.name} non riesce ad arrivare a: ${T.name}.`);
   o.users.push({ sim: sim.id, seat });
@@ -686,6 +747,7 @@ function walkStep(g, sim, dt, notify) {
   if (sim.path.length) return;
   const c = sim.cur;
   if (c.id === 'go') { sim.cur = null; return; }
+  if (c.id === 'vaiVia') { sim.gone = true; return; }
   if (c.id === 'vaiLavoro') {
     sim.cur = null;
     sim.atWork = true;
@@ -727,11 +789,11 @@ function faceTo(sim, x, y) {
 function startSocial(g, sim, notify) {
   const c = sim.cur;
   const p = g.sims.find(s => s.id === c.partner);
-  const busy = p.atWork || p.cur?.id === 'vaiLavoro' || p.cur?.id === 'dormi' || p.cur?.inside || p.cur?.social || p.cur?.id === 'spegni';
-  if (busy) { if (c.by !== 'auto') notify(`${p.name} adesso non può.`); sim.cur = null; return; }
-  if (g.rel < c.min) {
-    g.rel = clamp(g.rel - 3, 0, 100);
-    notify(`🙅 ${p.name} non ne ha voglia: prima migliorate il rapporto (chiacchierate, scherzate).`);
+  const busy = !p || p.leaving || p.atWork || p.cur?.id === 'vaiLavoro' || p.cur?.id === 'dormi' || p.cur?.inside || p.cur?.social || p.cur?.id === 'spegni';
+  if (busy) { if (c.by !== 'auto' && p) notify(`${p.name} adesso non può.`); sim.cur = null; return; }
+  if (relOf(g, sim, p) < c.min) {
+    addRel(g, sim, p, -3, notify);
+    if (!sim.npc) notify(`🙅 ${p.name} non ne ha voglia: prima ${p.npc ? 'diventate più amici' : 'migliorate il rapporto'} (chiacchierate, scherzate).`);
     sim.cur = null;
     return;
   }
@@ -755,7 +817,7 @@ function doStep(g, sim, dt, notify) {
     sim.needs[k] = clamp(sim.needs[k] + v * frac * mult, 0, 100);
   }
   if (c.skill) sim.skills[c.skill] = Math.min(10, (sim.skills[c.skill] ?? 0) + dt / 60 * 0.6 / (1 + (sim.skills[c.skill] ?? 0) * 0.15));
-  if (c.social && !c.follower) g.rel = clamp(g.rel + (c.rel * dt) / c.dur, 0, 100);
+  if (c.social && !c.follower) { const p = g.sims.find(s => s.id === c.partner); if (p) addRel(g, sim, p, (c.rel * dt) / c.dur * (p.npc || sim.npc ? 2.5 : 1), notify); }
   if (c.dance || c.run) sim.walk += dt * 8;
   if (o?.fire && c.id !== 'spegni') { stopCur(sim, g); return; }   // è scoppiato un incendio: si molla tutto
   const done = c.until ? sim.needs[c.until] >= 99.5 : c.t >= c.dur;
@@ -812,7 +874,8 @@ function finishAction(g, sim, c, notify) {
   // Usarli sporca bagni e fornelli; gli elettrodomestici a volte si rompono
   if (o && T.dirties && !c.special) o.dirt = (o.dirt ?? 0) + 1;
   if (o && T.breaks && !c.special && Math.random() < 0.025) { o.broken = true; notify(`💥 ${T.name} si è rotto! Si può provare a ripararlo o chiamare il tecnico.`); }
-  if (c.id === 'dormi' ? g.sims.every(s => s === sim || s.cur?.id === 'dormi') : true) gameEvent(g, sim, c.id, notify);
+  if (c.cost && !sim.npc) { g.money -= c.cost; notify(`💳 ${sim.name} ha pagato il conto: ${c.cost} €`); }
+  if (!sim.npc && (c.id === 'dormi' ? g.sims.every(s => s === sim || s.npc || s.cur?.id === 'dormi') : true)) gameEvent(g, sim, c.id, notify);
   // Dopo mangiato restano i piatti: sul tavolo (se si è mangiato lì) o per terra vicino
   if (c.dishes && g.dishes.length < 10) {
     const seat = o && c.seat != null ? T.seats?.[c.seat] : null;
@@ -839,9 +902,18 @@ function autonomy(g, sim) {
   for (const [need, val] of needs) {
     if (val > 55) break;
     if (need === 'socialita') {
-      const p = other(g, sim);
-      if (!p.atWork && p.cur?.id !== 'vaiLavoro' && !p.cur?.inside && p.cur?.id !== 'dormi' && !p.cur?.social) {
-        sim.queue.push({ kind: 'social', action: g.rel > 60 && Math.random() < 0.4 ? 'abbraccia' : 'chiacchiera', by: 'auto' });
+      const p = sim.npc ? null : other(g, sim);
+      const free = q => !q.atWork && !q.leaving && q.cur?.id !== 'vaiLavoro' && !q.cur?.inside && q.cur?.id !== 'dormi' && !q.cur?.social;
+      if (p && free(p)) {
+        sim.queue.push({ kind: 'social', action: g.rel > 60 && Math.random() < 0.4 ? 'abbraccia' : 'chiacchiera', partner: p.id, by: 'auto' });
+        return;
+      }
+      // Qualcuno vicino con cui scambiare due parole (la gente della città non disturba chi è occupato)
+      const near = g.sims.filter(q => q !== sim && q.lv === sim.lv && free(q) && (sim.npc || q.npc)
+        && (!sim.npc || q.npc || (!q.cur && !q.queue.length)) && Math.hypot(q.x - sim.x, q.y - sim.y) < 9);
+      if (near.length) {
+        const q = near[Math.floor(Math.random() * near.length)];
+        sim.queue.push({ kind: 'social', action: Math.random() < 0.3 ? 'scherza' : 'chiacchiera', partner: q.id, by: 'auto' });
         return;
       }
       continue;
@@ -863,10 +935,31 @@ function autonomy(g, sim) {
     }
     if (best) { sim.queue.push({ kind: 'obj', obj: best.o.id, action: best.a.id, by: 'auto' }); return; }
   }
+  if (sim.npc) {   // la gente della città: qualcosa di divertente da fare, oppure due passi in giro
+    const fun = g.objects.filter(o => !(o.users ?? []).length && actionsFor(g, sim, o).some(a => (a.gain?.svago ?? 0) > 0 && !a.cost && TYPES[o.type].actions.includes(a.id)));
+    if (fun.length && Math.random() < 0.6) {
+      const o = fun[Math.floor(Math.random() * fun.length)];
+      const a = actionsFor(g, sim, o).find(x => (x.gain?.svago ?? 0) > 0 && !x.cost);
+      sim.queue.push({ kind: 'obj', obj: o.id, action: a.id, by: 'auto' });
+      return;
+    }
+    const x = Math.floor(sim.x + (Math.random() - 0.5) * 12), y = Math.floor(sim.y + (Math.random() - 0.5) * 12);
+    if (floorAt(g, sim.lv, x, y) != null) sim.queue.push({ kind: 'go', x, y, lv: sim.lv, by: 'auto' });
+    return;
+  }
   // Tutto a posto: faccende di casa
   const mailbox = g.objects.find(o => TYPES[o.type].mailbox);
   if (g.bill && mailbox && g.money >= g.bill.amount && (g.day - g.bill.since >= 1 || Math.random() < 0.3)) { sim.queue.push({ kind: 'obj', obj: mailbox.id, action: 'paga', by: 'auto' }); return; }
   if (g.dishes.length && Math.random() < 0.5) { sim.queue.push({ kind: 'dish', id: g.dishes[0].id, by: 'auto' }); return; }
   const dirty = g.objects.find(o => (o.dirt ?? 0) >= 4 && !(o.users ?? []).length);
   if (dirty && Math.random() < 0.25) sim.queue.push({ kind: 'obj', obj: dirty.id, action: 'pulisci', by: 'auto' });
+}
+
+// ---------------------------------------------------------------- abitanti della città
+const PEOPLE = [['Marco', 'lui'], ['Giulia', 'lei'], ['Luca', 'lui'], ['Sara', 'lei'], ['Davide', 'lui'], ['Chiara', 'lei'], ['Matteo', 'lui'],
+  ['Elena', 'lei'], ['Andrea', 'lui'], ['Francesca', 'lei'], ['Simone', 'lui'], ['Martina', 'lei'], ['Paolo', 'lui'], ['Alice', 'lei']];
+function newTown() {
+  const letters = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const people = PEOPLE.map(([name, gender], i) => ({ key: 'p' + i, name, gender, model: `${gender === 'lei' ? 'female' : 'male'}-${letters[(i * 5 + 2) % 6]}` }));
+  return { at: null, home: null, friends: {}, people };
 }

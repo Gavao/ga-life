@@ -69,6 +69,9 @@ const A = {
   freccette: { id: 'freccette', label: 'Gioca a freccette', emoji: '🎯', dur: 25, gain: { svago: 26 } },
   drink: { id: 'drink', label: 'Preparati un drink', emoji: '🍹', dur: 20, gain: { svago: 22, socialita: 8, vescica: -15 } },
   mangiaPizza: { id: 'mangiaPizza', label: 'Mangia la pizza', emoji: '🍕', dur: 20, gain: { fame: 60, svago: 8 }, special: 'pizza', dishes: true },
+  // In città
+  cena: { id: 'cena', label: 'Ordina la cena (30 €)', emoji: '🍝', dur: 50, gain: { fame: 90, svago: 22, socialita: 12, vescica: -10 }, pose: 'sit', cost: 30 },
+  aperitivo: { id: 'aperitivo', label: 'Ordina un aperitivo (12 €)', emoji: '🍸', dur: 25, gain: { svago: 25, socialita: 10, fame: 10, vescica: -12 }, cost: 12 },
 };
 export const ACTIONS = A;
 
@@ -706,6 +709,15 @@ export const TYPES = {
       const f = frontFace(o);
       if (f) { facePanel(ctx, v, r, f, 0.15, 0.85, 30, 50, `hsl(${(performance.now() / 15) % 360}, 80%, 60%)`); facePanel(ctx, v, r, f, 0.2, 0.8, 8, 24, '#fde68a'); }
     },
+  },
+  tavoloRistorante: {
+    name: 'Tavolo del ristorante', cat: null, price: 0, w: 2, d: 2, actions: ['cena'], seats: [[1, 0.25], [1, 1.75]], seatH: 16, top: 28, shop: false, amb: 2,
+    draw(...a) { TYPES.tavolo.draw(...a); },
+    front(...a) { TYPES.tavolo.front(...a); },
+  },
+  banconeBar: {
+    name: 'Bancone del locale', cat: null, price: 0, w: 2, d: 1, actions: ['aperitivo'], shop: false, amb: 2,
+    draw(...a) { TYPES.bar.draw(...a); },
   },
   pizza: {
     name: 'Pizza consegnata', cat: null, price: 0, w: 1, d: 1, actions: ['mangiaPizza'], shop: false,
