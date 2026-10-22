@@ -1,17 +1,16 @@
-// GA Life: una piccola "The Sims" per due. Lotto isometrico con casa e giardino; tocchi un oggetto per dare un
+// GA Life: una piccola "The Sims" per due, in 3D. Lotto con casa e giardino; tocchi un oggetto per dare un
 // ordine al Sim selezionato, il pavimento per farlo camminare, l'altro Sim per interagire. In Arreda si compra
 // (trascinando i mobili) e si costruisce (muri, porte, finestre, pavimenti, colori).
 // Tutto resta nel telefono (IndexedDB): la partita si salva da sola.
 import { getSetting, setSetting } from './db.js';
 import { APP_VERSION } from './version.js';
-import { makeView, floorTile, drawSim, bubble, box, shade } from './iso.js';
+import { createWorld, loadModels, portrait, CHAR_MODELS } from './world3d.js';
 import { TYPES, CATS, NEEDS, SKILLS, SOCIAL, ACTIONS, footprint } from './catalog.js';
 import { newGame, tick, order, cancel, actionsFor, mood, moodlets, ambiente, canPlace, crossesWall, timeText, dayText, SPEEDS, CAREERS, oa,
   migrate, gameEvent, currentGoal, GOALS, WISHES, wkey, exitTile, floorAt, stairEnds, LEVELS } from './game.js';
 
 const $ = sel => document.querySelector(sel);
 const canvas = $('#canvas');
-const ctx = canvas.getContext('2d');
 const sheet = $('#sheet');
 const native = window.Android;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -20,7 +19,7 @@ const eur = n => `${Math.round(n).toLocaleString('it-IT')} €`;
 let g = null;            // la partita
 let sel = 0;             // Sim selezionato
 let w = 0, h = 0;
-const v = makeView();
+let world = null;        // la scena 3D (world3d.js)
 let mini = (() => { try { return localStorage.getItem('mini') === '1'; } catch { return false; } })();   // pannello in basso ridotto
 let build = null;        // modalità Arreda: { tab, cat, placing, tool, floor, paint }
 let viewLv = 0;          // piano che si sta guardando: -1 tavernetta, 0 piano terra, 1 primo piano
@@ -43,7 +42,6 @@ const FLOORS = {
   marmo: ['Marmo', '#f1f5f9', '#e2e8f0', 15], cemento: ['Cemento', '#a8a29e', '#a19b97', 3], pietra: ['Pietra', '#cbd5e1', '#b6c2d0', 4], erba: ['Prato', '#4ade80', '#45d379', 1],
 };
 const WALL_COLORS = ['#ede9fe', '#fef3c7', '#dcfce7', '#dbeafe', '#fee2e2', '#f5f5f4', '#d6d3d1', '#fde68a', '#c7d2fe', '#fbcfe8'];
-const WALL_H = 40;          // muri "tagliati" bassi, come in The Sims, per vedere dentro
 const PRICES = { muro: 15, porta: 120, finestra: 80, pittura: 5, saracinesca: 400 };
 const FLOOR_EXTRA = { '-1': 25, 0: 0, 1: 10 };   // costo in più a casella: scavare la tavernetta, la struttura del primo piano
 
@@ -63,239 +61,57 @@ function notify(text) {
   if (/crollat|figuraccia|in tempo/.test(text)) { if (native?.vibrate) native.vibrate('60'); else navigator.vibrate?.(60); }
 }
 
-// ---------------------------------------------------------------- disegno
+// ---------------------------------------------------------------- disegno (in 3D: world3d.js)
 function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   w = canvas.clientWidth; h = canvas.clientHeight;
-  canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  world.resize();
 }
-function centerOn(x, y) {
-  v.ox = w / 2 - (x - y) * v.TW / 2;
-  v.oy = h * 0.38 - (x + y) * v.TH / 2;   // un po' in alto: sotto c'è il pannello
-}
-const quad = (pts, fill) => {
-  ctx.beginPath();
-  pts.forEach((p, i) => (i ? ctx.lineTo(...p) : ctx.moveTo(...p)));
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.fill();
-};
+function centerOn(x, y, lv = viewLv) { world.centerOn(x, y, lv); }
 
-/** Profondità di disegno di un oggetto: chi è più "in basso" sullo schermo sta davanti. */
-const objDepth = o => { const f = footprint(o); return f.x + f.w + f.y + f.d - 0.01; };
-/** Un Sim che usa un posto di un mobile (letto, divano, sedia…) si disegna subito dopo il mobile: sopra, non dentro. */
-function simDepth(s) {
-  const c = s.cur;
-  if (c?.state === 'do' && c.objRef && c.seat != null) {
-    const o = c.objRef, T = TYPES[o.type];
-    const base = objDepth(o);
-    if (!T.front) return base + 0.005;
-    const f = footprint(o);
-    return s.x + s.y < f.x + f.w / 2 + f.y + f.d / 2 - 0.05 ? base + 0.005 : base + 0.012;   // dietro o davanti al pezzo "front"
-  }
-  return s.x + s.y + 0.05;
+/** Etichette sopra la scena: nomi sotto i piedi, fumetti sopra la testa, guasti e corrente staccata. */
+const labelBox = $('#labels');
+const labelPool = new Map();
+function label(key, html, pos, cls) {
+  let el = labelPool.get(key);
+  if (!el) { el = document.createElement('div'); labelPool.set(key, el); labelBox.append(el); }
+  if (el._html !== html) { el.innerHTML = html; el._html = html; }
+  if (el.className !== cls) el.className = cls;
+  el.style.transform = `translate(${Math.round(pos[0])}px, ${Math.round(pos[1])}px)`;
+  el._seen = true;
 }
-const seatHeight = s => {
-  const c = s.cur;
-  if (c?.state === 'do' && c.objRef && c.seat != null) return TYPES[c.objRef.type].seatH ?? 0;
-  return 0;
-};
-
-function draw() {
-  const hr = g.minute / 60;
-  const night = hr < 6 || hr > 21 ? 1 : hr < 7 ? 7 - hr : hr > 19 ? (hr - 19) / 2 : 0;
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, night > 0.5 ? '#1e1b4b' : '#7dd3fc');
-  grad.addColorStop(1, night > 0.5 ? '#312e81' : '#bae6fd');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-  const m = 6;
-  if (viewLv === -1) {   // tavernetta: sotto terra, si vede solo quello che è stato scavato
-    quad([v.at(-m, -m), v.at(g.W + m, -m), v.at(g.W + m, g.H + m), v.at(-m, g.H + m)], '#3b2f2a');
-    for (let y = 0; y < g.H; y++) for (let x = 0; x < g.W; x++) if (floorAt(g, -1, x, y) == null) floorTile(ctx, v, x, y, (x + y) % 2 ? '#4a3b33' : '#46382f', 'rgba(0,0,0,.15)');
-  } else {   // terreno intorno al lotto e strada davanti
-    quad([v.at(-m, -m), v.at(g.W + m, -m), v.at(g.W + m, g.H), v.at(-m, g.H)], '#3fbf6f');
-    quad([v.at(-m, g.H), v.at(g.W + m, g.H), v.at(g.W + m, g.H + 0.6), v.at(-m, g.H + 0.6)], '#d6d3d1');
-    quad([v.at(-m, g.H + 0.6), v.at(g.W + m, g.H + 0.6), v.at(g.W + m, g.H + 3), v.at(-m, g.H + 3)], '#475569');
-    for (let x = -m; x < g.W + m; x += 2) quad([v.at(x, g.H + 1.75), v.at(x + 1, g.H + 1.75), v.at(x + 1, g.H + 1.85), v.at(x, g.H + 1.85)], '#f8fafc');
-    quad([v.at(-m, g.H + 3), v.at(g.W + m, g.H + 3), v.at(g.W + m, g.H + m), v.at(-m, g.H + m)], '#3fbf6f');
-  }
-  if (viewLv === 1) {   // primo piano: il piano terra si vede in trasparenza sotto
-    ctx.globalAlpha = 0.35;
-    drawLevel(0, false);
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = 'rgba(15,23,42,.25)';
-    ctx.fillRect(0, 0, w, h);
-  }
-  drawLevel(viewLv, true);
-  for (const s of g.sims) if (!s.atWork && s.lv === viewLv) { drawName(s); drawBubble(s); }
-  for (const o of g.objects) if (lvOf(o) === viewLv) drawState(o);
-  if (night > 0 && viewLv !== -1) {
-    ctx.fillStyle = `rgba(30,27,75,${0.32 * Math.min(1, night)})`;
-    ctx.fillRect(0, 0, w, h);
-  }
-}
-
-/** Disegna un piano: pavimenti, muri, oggetti e (se live) Sim, piatti e anteprime della costruzione. */
-function drawLevel(lv, live) {
-  const L = g.levels[lv];
-  for (let y = 0; y < g.H; y++) for (let x = 0; x < g.W; x++) {
-    const id = L.floors[y * g.W + x];
-    if (id == null) continue;
-    const f = FLOORS[id] ?? FLOORS.erba;
-    floorTile(ctx, v, x, y, f[1 + ((x + y) % 2)], f[0] === 'Prato' ? 'rgba(0,0,0,.03)' : 'rgba(0,0,0,.08)');
-  }
-  if (lv === 0) { const [ex, ey] = exitTile(g); floorTile(ctx, v, ex, ey, '#9ca3af'); }
-  const items = [];
-  for (const o of g.objects) {
-    if (lvOf(o) !== lv || (live && build?.placing?.moveId === o.id) || (o.inUse != null && o.inUse >= 0)) continue;
-    if (TYPES[o.type].flat) { TYPES[o.type].draw(ctx, v, o, g); continue; }
-    const d = objDepth(o);
-    items.push({ depth: d, o });
-    if (TYPES[o.type].front) items.push({ depth: d + 0.008, front: o });
-  }
-  if (live) for (const s of g.sims) if (!s.atWork && s.lv === lv) items.push({ depth: simDepth(s), s });
-  for (const k in L.walls) {
-    const [t, a, b] = k.split(':'), p = +a, q = +b;
-    items.push(t === 'v' ? { depth: p + q + 1.02, wall: k, r: [p - 0.06, q, 0.12, 1] } : { depth: p + q + 1.02, wall: k, r: [p, q - 0.06, 1, 0.12] });
-  }
-  if (live) {
-    for (const d of g.dishes ?? []) if ((d.lv ?? 0) === lv) items.push({ depth: d.h ? d.x + d.y + 3 : d.x + d.y, dish: d });   // sul tavolo: sopra il piano
-    if (build?.placing) items.push({ depth: objDepth(build.placing) + 0.02, ghost: build.placing });
-    if (build?.wallPreview) for (const r of build.wallPreview) items.push({ depth: 999, preview: r });
-  }
-  items.sort((a, b) => a.depth - b.depth);
-  for (const it of items) {
-    if (it.o) TYPES[it.o.type].draw(ctx, v, it.o, g);
-    else if (it.front) TYPES[it.front.type].front(ctx, v, it.front);
-    else if (it.ghost) drawGhost(it.ghost);
-    else if (it.wall) drawWall(L.walls[it.wall], it.wall, it.r);
-    else if (it.dish) drawDish(it.dish);
-    else if (it.preview) box(ctx, v, ...it.preview.r, WALL_H, it.preview.ok ? 'rgba(74,222,128,.7)' : 'rgba(239,68,68,.6)');
-    else drawOneSim(it.s);
-  }
-}
-
-/** Sporco, guasti, fiamme e corrente staccata sopra gli oggetti. */
-function drawState(o) {
-  const T = TYPES[o.type];
-  const f = footprint(o);
-  const [sx, sy] = v.at(f.x + f.w / 2, f.y + f.d / 2, 30);
-  const t = performance.now() / 1000;
-  if (o.fire) {
-    for (let i = 0; i < 7; i++) {
-      const k = (t * 1.7 + i / 7) % 1;
-      ctx.fillStyle = `rgba(${240 + Math.round(15 * Math.sin(i))},${Math.round(160 - k * 120)},20,${0.9 - k * 0.8})`;
-      ctx.beginPath(); ctx.arc(sx + Math.sin(i * 2.3 + t * 3) * 10 * v.z, sy - k * 40 * v.z, (10 - k * 6) * v.z, 0, Math.PI * 2); ctx.fill();
+function drawLabels() {
+  for (const el of labelPool.values()) el._seen = false;
+  if (!build) {
+    for (const s of g.sims) {
+      if (s.atWork || s.lv !== viewLv) continue;
+      const a = world.simAnchor(s);
+      if (!a?.feet) continue;
+      label('n' + s.id, esc(s.name), a.feet, `lbl name${s.id === sel ? ' on' : ''}`);
+      const low = NEEDS.find(([k]) => s.needs[k] < 15);
+      const b = s.cur && s.cur.id !== 'go' ? (s.cur.id === 'dormi' ? '💤' : s.cur.emoji) : low ? low[1] : null;
+      if (b && a.head) label('b' + s.id, b, a.head, `lbl bubble${!s.cur && low ? ' alert' : ''}`);
     }
-    return;
   }
-  if ((o.dirt ?? 0) >= 4) {   // macchie e moscerini
-    ctx.fillStyle = 'rgba(120,53,15,.55)';
-    for (const [dx, dy] of [[-8, 6], [6, 10], [2, -2]]) { ctx.beginPath(); ctx.ellipse(sx + dx * v.z, sy + dy * v.z + 18 * v.z, 5 * v.z, 2.5 * v.z, 0, 0, Math.PI * 2); ctx.fill(); }
-    ctx.fillStyle = '#1f2937';
-    for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(sx + Math.sin(t * 4 + i * 2) * 12 * v.z, sy - 6 * v.z + Math.cos(t * 5 + i) * 6 * v.z, 1.3 * v.z, 0, Math.PI * 2); ctx.fill(); }
+  for (const o of g.objects) {
+    if (lvOf(o) !== viewLv) continue;
+    const icon = o.fire ? null : o.broken ? '💥' : TYPES[o.type].elec && !g.power ? '🔌' : null;
+    if (!icon) continue;
+    const p = world.objAnchor(o, 1.7);
+    if (p) label('o' + o.id, icon, p, 'lbl bubble alert');
   }
-  if (o.broken) {
-    ctx.fillStyle = 'rgba(100,116,139,.6)';
-    for (let i = 0; i < 3; i++) { const k = (t * 0.6 + i / 3) % 1; ctx.beginPath(); ctx.arc(sx + Math.sin(i * 3) * 6 * v.z, sy - 10 * v.z - k * 30 * v.z, (5 + k * 6) * v.z, 0, Math.PI * 2); ctx.fill(); }
-    bubble(ctx, v, sx - 16 * v.z, sy + 50 * v.z, '💥', true);
-  } else if (T.elec && !g.power) bubble(ctx, v, sx - 16 * v.z, sy + 50 * v.z, '🔌', true);
-}
-
-function drawWall(wl, k, r) {
-  const c = wl.color ?? '#ede9fe';
-  const top = { top: shade(c, -0.45) };
-  if (wl.garage) {   // saracinesca del garage: si passa, con le doghe
-    box(ctx, v, ...r, 6, c, { z0: WALL_H - 6, ...top });
-    box(ctx, v, ...r, WALL_H - 6, 'rgba(148,163,184,.55)', { top: 'rgba(148,163,184,.3)', line: 'rgba(71,85,105,.6)' });
-    return;
-  }
-  if (wl.door) {   // stipiti e architrave: si passa in mezzo
-    const vert = k[0] === 'v';
-    const [x, y, ww, dd] = r;
-    if (vert) { box(ctx, v, x, y, ww, 0.12, WALL_H, c, top); box(ctx, v, x, y + 0.88, ww, 0.12, WALL_H, c, top); box(ctx, v, x, y, ww, 1, 6, c, { z0: WALL_H - 6, ...top }); }
-    else { box(ctx, v, x, y, 0.12, dd, WALL_H, c, top); box(ctx, v, x + 0.88, y, 0.12, dd, WALL_H, c, top); box(ctx, v, x, y, 1, dd, 6, c, { z0: WALL_H - 6, ...top }); }
-    return;
-  }
-  if (wl.win) {   // finestra: muretto, vetro, sopra il muro
-    box(ctx, v, ...r, 14, c, top);
-    box(ctx, v, ...r, WALL_H - 22, 'rgba(186,230,253,.55)', { z0: 14, top: 'rgba(186,230,253,.4)', line: 'rgba(255,255,255,.8)' });
-    box(ctx, v, ...r, 8, c, { z0: WALL_H - 8, ...top });
-    return;
-  }
-  box(ctx, v, ...r, WALL_H, c, top);
-}
-
-function drawDish(d) {
-  const [sx, sy] = v.at(d.x, d.y, d.h + 1);
-  ctx.fillStyle = '#f8fafc';
-  ctx.strokeStyle = 'rgba(0,0,0,.3)';
-  ctx.beginPath(); ctx.ellipse(sx, sy, 8 * v.z, 4 * v.z, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#a16207';
-  ctx.beginPath(); ctx.ellipse(sx + 1, sy, 4 * v.z, 2 * v.z, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = 'rgba(132,204,22,.8)';   // "puzza" se resta lì
-  for (let i = 0; i < 2; i++) { const t = (performance.now() / 900 + i * 0.5) % 1; ctx.beginPath(); ctx.arc(sx - 4 + i * 8, sy - 6 - t * 14 * v.z, 1.8 * v.z, 0, Math.PI * 2); ctx.fill(); }
-}
-
-function drawOneSim(s) {
-  const [sx, sy] = v.at(s.x, s.y, seatHeight(s));
-  if (s.id === sel && !build) {
-    ctx.strokeStyle = '#22c55e';
-    ctx.lineWidth = 3;
-    const [gx, gy] = s.pose ? [sx, sy] : [sx, sy];
-    ctx.beginPath(); ctx.ellipse(gx, gy, 15 * v.z, 7 * v.z, 0, 0, Math.PI * 2); ctx.stroke();
-  }
-  const moving = s.cur?.state === 'walk' || s.cur?.dance || s.cur?.run;
-  drawSim(ctx, v, sx, sy, s.look, {
-    face: s.face, walk: moving ? s.walk : 0, pose: s.pose === 'lie' ? 'sleep' : s.pose, back: s.back,
-    mood: mood(s, g), plumbob: s.id === sel && !build && s.pose !== 'lie',
-  });
-  if (s.cur?.state === 'do' && s.cur.id === 'doccia') {   // vapore della doccia
-    ctx.fillStyle = 'rgba(255,255,255,.5)';
-    for (let i = 0; i < 4; i++) { const t = performance.now() / 600 + i; ctx.beginPath(); ctx.arc(sx + Math.sin(t) * 10 * v.z, sy - 40 * v.z - (t % 1) * 30 * v.z, 6 * v.z, 0, Math.PI * 2); ctx.fill(); }
-  }
-}
-
-/** Nome sotto i piedi, così si capisce sempre chi è chi (verde quello che comandi). */
-function drawName(s) {
-  const [sx, sy] = v.at(s.x, s.y, seatHeight(s));
-  ctx.font = `800 ${Math.max(10, 11 * v.z)}px system-ui, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  const y = sy + 8 * v.z, tw = ctx.measureText(s.name).width + 10;
-  ctx.fillStyle = s.id === sel ? 'rgba(22,163,74,.9)' : 'rgba(26,20,38,.75)';
-  ctx.beginPath(); ctx.roundRect?.(sx - tw / 2, y - 2, tw, 16, 8); ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.fillText(s.name, sx, y);
-}
-
-function drawBubble(s) {
-  const [sx, sy] = v.at(s.x, s.y, seatHeight(s));
-  const low = NEEDS.find(([k]) => s.needs[k] < 15);
-  if (s.cur && s.cur.id !== 'go') bubble(ctx, v, sx, sy, s.cur.id === 'dormi' ? 'Zz' : s.cur.emoji);
-  else if (low) bubble(ctx, v, sx, sy, low[1], true);
-}
-
-function drawGhost(p) {
-  const ok = canPlace(g, p, p.moveId);
-  ctx.globalAlpha = 0.8;
-  TYPES[p.type].draw(ctx, v, p);
-  TYPES[p.type].front?.(ctx, v, p);
-  ctx.globalAlpha = 1;
-  const f = footprint(p);
-  quad([v.at(f.x, f.y), v.at(f.x + f.w, f.y), v.at(f.x + f.w, f.y + f.d), v.at(f.x, f.y + f.d)], ok ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.4)');
+  for (const [k, el] of labelPool) if (!el._seen) { el.remove(); labelPool.delete(k); }
 }
 
 // ---------------------------------------------------------------- pannelli (HUD)
+let portraitsHtml = '';
 function hud() {
   $('#clock').innerHTML = `<b>${timeText(g)}</b><small>${esc(dayText(g))}</small>`;
   $('#money').textContent = eur(g.money);
   $('#money').classList.toggle('neg', g.money < 0);
   for (const b of document.querySelectorAll('[data-speed]')) b.classList.toggle('on', +b.dataset.speed === g.speed && !build);
-  $('#portraits').innerHTML = g.sims.map(s => `<button class="portrait ${s.id === sel ? 'on' : ''}" data-sel="${s.id}" style="--mood:hsl(${Math.round(mood(s, g) * 1.2)},75%,48%)">
-      <span class="face" style="background:${s.look.skin};border-color:${s.look.hair}">${esc(s.name[0] ?? '?')}</span><small>${esc(s.name)}</small>${s.atWork ? '<i>💼</i>' : s.lv !== viewLv ? `<b>${s.lv > viewLv ? '⬆️' : '⬇️'}</b>` : ''}</button>`).join('');
+  const ph = g.sims.map(s => `<button class="portrait ${s.id === sel ? 'on' : ''}" data-sel="${s.id}" style="--mood:hsl(${Math.round(mood(s, g) * 1.2)},75%,48%)">
+      <span class="face"><img src="${portrait(modelOf(s))}" alt=""></span><small>${esc(s.name)}</small>${s.atWork ? '<i>💼</i>' : s.lv !== viewLv ? `<b>${s.lv > viewLv ? '⬆️' : '⬇️'}</b>` : ''}</button>`).join('');
+  if (ph !== portraitsHtml) { portraitsHtml = ph; $('#portraits').innerHTML = ph; }
   $('#bottom').classList.toggle('mini', mini && !build);
   // La vista segue il Sim selezionato quando cambia piano (scale)
   const fs = g.sims[sel];
@@ -328,95 +144,67 @@ const moodText = m => (m >= 80 ? '😄 Felicissimo' : m >= 60 ? '🙂 Di buon um
 const ambText = a => (a >= 10 ? 'casa bellissima' : a >= 5 ? 'casa accogliente' : a >= 0 ? 'casa normale' : 'disordine');
 
 // ---------------------------------------------------------------- tocchi: vista, selezione, ordini, costruzione
+// Un dito sposta la vista (o costruisce), due dita: zoom, rotazione e spostamento. Sul computer: rotellina e tasto destro.
 const pointers = new Map();
 let drag = null, pinch = null;
 
+canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerdown', e => {
   try { canvas.setPointerCapture?.(e.pointerId); } catch { /* niente */ }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   closeMenu();
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
-    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), z: v.z, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, ox: v.ox, oy: v.oy };
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x), my: (a.y + b.y) / 2, pan: world.panStart((a.x + b.x) / 2, (a.y + b.y) / 2) };
     if (drag?.kind === 'wall') build.wallPreview = null;
     drag = null;
     return;
   }
-  drag = { x: e.clientX, y: e.clientY, ox: v.ox, oy: v.oy, moved: false, kind: 'pan' };
-  if (build) buildDown(drag, e.clientX, e.clientY);
+  drag = { x: e.clientX, y: e.clientY, moved: false, kind: e.button === 2 ? 'orbit' : 'pan', pan: world.panStart(e.clientX, e.clientY) };
+  if (build && drag.kind === 'pan') buildDown(drag, e.clientX, e.clientY);
 });
 canvas.addEventListener('pointermove', e => {
   if (!pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pinch && pointers.size === 2) {   // due dita: zoom e spostamento
+  if (pinch && pointers.size === 2) {   // due dita: zoom, rotazione, inclinazione e spostamento
     const [a, b] = [...pointers.values()];
-    v.ox = pinch.ox + ((a.x + b.x) / 2 - pinch.mx);
-    v.oy = pinch.oy + ((a.y + b.y) / 2 - pinch.my);
-    zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, pinch.z * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d);
+    const d = Math.hypot(a.x - b.x, a.y - b.y), ang = Math.atan2(b.y - a.y, b.x - a.x), my = (a.y + b.y) / 2;
+    world.zoom(d / pinch.d);
+    let da = ang - pinch.ang;
+    if (da > Math.PI) da -= 2 * Math.PI;
+    if (da < -Math.PI) da += 2 * Math.PI;
+    world.rotate(-da);
+    if (Math.abs(d - pinch.d) < 6) world.tilt((my - pinch.my) * 0.004);
+    world.panMove(pinch.pan, (a.x + b.x) / 2, my);
+    Object.assign(pinch, { d, ang, my });
     return;
   }
   if (!drag) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   if (Math.hypot(dx, dy) > 8) drag.moved = true;
   if (!drag.moved) return;
-  if (drag.kind === 'pan') { v.ox = drag.ox + dx; v.oy = drag.oy + dy; }
+  if (drag.kind === 'orbit') { world.rotate(-(e.clientX - prev.x) * 0.008); world.tilt((e.clientY - prev.y) * 0.005); }
+  else if (drag.kind === 'pan') world.panMove(drag.pan, e.clientX, e.clientY);
   else buildMove(drag, e.clientX, e.clientY);
 });
 const up = e => {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) pinch = null;
   if (drag && e.type === 'pointerup') {
-    if (drag.kind !== 'pan') buildUp(drag, e.clientX, e.clientY);
-    else if (!drag.moved) tap(e.clientX, e.clientY);
+    if (drag.kind !== 'pan' && drag.kind !== 'orbit') buildUp(drag, e.clientX, e.clientY);
+    else if (!drag.moved && drag.kind === 'pan') tap(e.clientX, e.clientY);
   }
   drag = null;
 };
 canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', up);
-canvas.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, v.z * (e.deltaY < 0 ? 1.1 : 0.9)); }, { passive: false });
-
-function zoomAt(sx, sy, z) {
-  z = Math.max(0.4, Math.min(2, z));
-  const [tx, ty] = v.tile(sx, sy);
-  v.z = z;
-  const [nx, ny] = v.at(tx, ty);
-  v.ox += sx - nx; v.oy += sy - ny;
-}
+canvas.addEventListener('wheel', e => { e.preventDefault(); world.zoom(e.deltaY < 0 ? 1.1 : 0.9); }, { passive: false });
 
 /** Cosa c'è sotto il dito: un Sim, dei piatti, un oggetto o una casella. */
-function hit(sx, sy, withSims = true) {
-  if (withSims) {
-    for (const s of [...g.sims].sort((a, b) => simDepth(b) - simDepth(a))) {
-      if (s.atWork || s.lv !== viewLv) continue;
-      const [px, py] = v.at(s.x, s.y, seatHeight(s));
-      if (Math.abs(sx - px) < 16 * v.z && sy < py + 6 * v.z && sy > py - 62 * v.z) return { sim: s };
-    }
-    for (const d of g.dishes ?? []) {
-      if ((d.lv ?? 0) !== viewLv) continue;
-      const [px, py] = v.at(d.x, d.y, d.h);
-      if (Math.hypot(sx - px, sy - py) < 14 * v.z) return { dish: d };
-    }
-  }
-  let best = null;
-  for (const o of g.objects) {
-    if (lvOf(o) !== viewLv || (o.inUse != null && o.inUse >= 0)) continue;
-    const f = footprint(o);
-    const tall = TYPES[o.type].flat ? 0 : 50;
-    const pts = [[f.x, f.y], [f.x + f.w, f.y], [f.x + f.w, f.y + f.d], [f.x, f.y + f.d]].flatMap(([x, y]) => [v.at(x, y), v.at(x, y, tall)]);
-    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-    if (sx < Math.min(...xs) || sx > Math.max(...xs) || sy < Math.min(...ys) || sy > Math.max(...ys)) continue;
-    // dentro il rombo della base (o sopra di essa, per gli oggetti alti)
-    const [tx, ty] = v.tile(sx, sy + tall * v.z * 0.5);
-    const inside = tx >= f.x - 0.6 && tx <= f.x + f.w + 0.6 && ty >= f.y - 0.6 && ty <= f.y + f.d + 0.6;
-    if (!inside) continue;
-    const depth = objDepth(o) - (TYPES[o.type].flat ? 100 : 0);
-    if (!best || depth > best.depth) best = { obj: o, depth };
-  }
-  if (best) return best;
-  const [tx, ty] = v.tile(sx, sy);
-  if (floorAt(g, viewLv, Math.floor(tx), Math.floor(ty)) != null) return { tile: [Math.floor(tx), Math.floor(ty)] };
-  return {};
-}
+const hit = (sx, sy, withSims = true) => world.pick(sx, sy, g, viewLv, withSims);
+/** Punto del pavimento del piano che si guarda sotto il dito (in caselle, con i decimali). */
+const tileAt = (sx, sy) => world.tileAt(sx, sy, viewLv);
 
 function tap(sx, sy) {
   if (build) return;
@@ -475,6 +263,7 @@ function phoneMenu(sx, sy) {
 function setLevel(lv) {
   viewLv = Math.max(-1, Math.min(1, lv));
   $('#lvName').textContent = LEVELS.find(l => l[0] === viewLv)[1];
+  world.centerOn(world.cam.tx, world.cam.tz, viewLv);
   if (build) buildPanel();
 }
 
@@ -536,10 +325,10 @@ function buildPanel() {
 }
 
 /** Il punto della griglia (angolo tra caselle) più vicino al dito. */
-const corner = (sx, sy) => { const [x, y] = v.tile(sx, sy); return [Math.round(x), Math.round(y)]; };
+const corner = (sx, sy) => { const [x, y] = tileAt(sx, sy); return [Math.round(x), Math.round(y)]; };
 /** Il pezzo di muro più vicino al dito (entro un terzo di casella), o null. */
 function wallAt(sx, sy) {
-  const [x, y] = v.tile(sx, sy);
+  const [x, y] = tileAt(sx, sy);
   const dv = Math.abs(x - Math.round(x)), dh = Math.abs(y - Math.round(y));
   const kv = wkey('v', Math.round(x), Math.floor(y)), kh = wkey('h', Math.floor(x), Math.round(y));
   const cand = [[dv, kv], [dh, kh]].filter(([d, k]) => d < 0.35 && walls()[k]).sort((a, b) => a[0] - b[0]);
@@ -569,7 +358,7 @@ function buildDown(d, sx, sy) {
   if (build.placing) {   // trascina l'oggetto da comprare
     d.kind = 'ghost';
     const f = footprint(build.placing);
-    const [tx, ty] = v.tile(sx, sy);
+    const [tx, ty] = tileAt(sx, sy);
     d.grab = [tx - f.x, ty - f.y];
     return;
   }
@@ -584,7 +373,7 @@ function buildDown(d, sx, sy) {
 }
 function buildMove(d, sx, sy) {
   if (d.kind === 'ghost') {
-    const [tx, ty] = v.tile(sx, sy);
+    const [tx, ty] = tileAt(sx, sy);
     build.placing.x = Math.round(tx - d.grab[0]);
     build.placing.y = Math.round(ty - d.grab[1]);
   } else if (d.kind === 'object') {   // inizia a spostare un mobile trascinandolo
@@ -592,7 +381,7 @@ function buildMove(d, sx, sy) {
     if (g.sims.some(s => s.cur?.obj === o.id)) { toast('Lo stanno usando: aspetta che finiscano.'); d.kind = 'none'; return; }
     build.placing = { type: o.type, x: o.x, y: o.y, rot: o.rot, color: o.color, moveId: o.id, lv: lvOf(o) };
     const f = footprint(build.placing);
-    const [tx, ty] = v.tile(d.x, d.y);
+    const [tx, ty] = tileAt(d.x, d.y);
     d.grab = [tx - f.x, ty - f.y];
     d.kind = 'ghost';
     d.autoDrop = true;
@@ -628,7 +417,7 @@ function buildUp(d, sx, sy) {
   if (d.kind === 'tool' && !d.moved) wallTool(sx, sy);
 }
 function paintFloor(d, sx, sy) {
-  const [x, y] = v.tile(sx, sy).map(Math.floor);
+  const [x, y] = tileAt(sx, sy).map(Math.floor);
   if (x < 0 || y < 0 || x >= g.W || y >= g.H || d.painted.has(`${x},${y}`)) return;
   d.painted.add(`${x},${y}`);
   const floors = g.levels[viewLv].floors;
@@ -645,7 +434,7 @@ const walls = () => g.levels[viewLv].walls;
 function wallTool(sx, sy) {
   const k = wallAt(sx, sy);
   if (!k && build.tool === 'abbatti' && viewLv !== 0) {   // su tavernetta e primo piano si può togliere il pavimento
-    const [x, y] = v.tile(sx, sy).map(Math.floor);
+    const [x, y] = tileAt(sx, sy).map(Math.floor);
     const floors = g.levels[viewLv].floors;
     if (floorAt(g, viewLv, x, y) == null) return;
     if (g.objects.some(o => lvOf(o) === viewLv && (() => { const f = footprint(o); return x >= f.x && x < f.x + f.w && y >= f.y && y < f.y + f.d; })())) return toast('Prima togli il mobile che c\'è sopra.');
@@ -692,7 +481,7 @@ function objectMenu(o, sx, sy) {
 function startPlacing(type) {
   const T = TYPES[type];
   if (g.money < T.price) return toast('Non avete abbastanza soldi.');
-  const [tx, ty] = v.tile(w / 2, h * 0.4);
+  const [tx, ty] = tileAt(w / 2, h * 0.4);
   build.placing = { type, x: Math.max(0, Math.floor(tx)), y: Math.max(0, Math.floor(ty)), rot: 0, color: T.colors?.[0], lv: viewLv };
   buildPanel();
 }
@@ -778,33 +567,27 @@ function settingsSheet() {
 }
 
 // ---------------------------------------------------------------- creazione della coppia
-const SKINS = ['#ffdbac', '#f1c27d', '#e0ac69', '#c68642', '#8d5524'];
-const HAIRS = ['#111827', '#3f2a14', '#7c2d12', '#facc15', '#e5e7eb'];
-const SHIRTS = ['#3b82f6', '#ef4444', '#22c55e', '#a855f7', '#f59e0b', '#ec4899'];
+/** Personaggio 3D del Sim (modelli Kenney: 6 per lui, 6 per lei). */
+const modelOf = s => (CHAR_MODELS.includes(s.look?.model) ? s.look.model : s.gender === 'lei' ? 'female-a' : 'male-a');
 let draft = null;
 function createScreen() {
   draft ??= [
-    { name: 'Io', gender: 'lui', look: { skin: SKINS[1], hair: HAIRS[1], long: false, shirt: SHIRTS[0], pants: '#1e3a8a' } },
-    { name: 'Lei', gender: 'lei', look: { skin: SKINS[0], hair: HAIRS[2], long: true, shirt: SHIRTS[5], pants: '#334155' } },
+    { name: 'Io', gender: 'lui', look: { model: 'male-a' } },
+    { name: 'Lei', gender: 'lei', look: { model: 'female-a' } },
   ];
-  const sw = (i, key, list) => `<div class="swatches">${list.map(c => `<button class="sw ${draft[i].look[key] === c ? 'on' : ''}" style="background:${c}" data-sw="${i}|${key}|${c}" aria-label="colore"></button>`).join('')}</div>`;
+  const models = d => CHAR_MODELS.filter(m => m.startsWith(d.gender === 'lei' ? 'female' : 'male'));
   $('#create').innerHTML = `<h1>GA Life</h1><p>Create la vostra coppia: poi arredate casa, trovate un lavoro e prendetevi cura l'uno dell'altra.</p>
-    ${draft.map((d, i) => `<section class="cs"><canvas class="prev" data-prev="${i}" width="120" height="150"></canvas><div class="cs-body">
+    ${draft.map((d, i) => `<section class="cs"><img class="prev" src="${portrait(modelOf(d))}" alt=""><div class="cs-body">
       <input data-name="${i}" value="${esc(d.name)}" maxlength="14" placeholder="Nome">
-      <div class="seg2"><button class="${d.gender === 'lui' ? 'on' : ''}" data-gender="${i}|lui">Lui</button><button class="${d.gender === 'lei' ? 'on' : ''}" data-gender="${i}|lei">Lei</button>
-        <button class="${d.look.long ? 'on' : ''}" data-long="${i}">Capelli lunghi</button></div>
-      <small>Pelle</small>${sw(i, 'skin', SKINS)}<small>Capelli</small>${sw(i, 'hair', HAIRS)}<small>Maglia</small>${sw(i, 'shirt', SHIRTS)}</div></section>`).join('')}
+      <div class="seg2"><button class="${d.gender === 'lui' ? 'on' : ''}" data-gender="${i}|lui">Lui</button><button class="${d.gender === 'lei' ? 'on' : ''}" data-gender="${i}|lei">Lei</button></div>
+      <small>Aspetto</small><div class="looks">${models(d).map(m => `<button class="${modelOf(d) === m ? 'on' : ''}" data-model="${i}|${m}"><img src="${portrait(m)}" alt=""></button>`).join('')}</div></div></section>`).join('')}
     <button class="primary" data-start>Iniziate!</button>`;
-  for (const c of document.querySelectorAll('[data-prev]')) {
-    const i = +c.dataset.prev, x = c.getContext('2d'), pv = makeView();
-    pv.z = 1.6;
-    x.clearRect(0, 0, 120, 150);
-    drawSim(x, pv, 60, 140, draft[i].look, { face: 1, mood: 90, plumbob: true });
-  }
 }
 function startView() {
-  v.z = w < 500 ? 0.7 : 0.95;   // sul telefono un po' più da lontano: si vede quasi tutta la casa
-  centerOn(10, 7.5);
+  world.cam.dist = w < 500 ? 34 : 26;   // sul telefono un po' più da lontano: si vede quasi tutta la casa
+  world.cam.yaw = Math.PI / 4;
+  const s = g.sims[sel];
+  centerOn(s.x - 1, s.y - 1, s.lv);
 }
 
 // ---------------------------------------------------------------- comandi dei pulsanti
@@ -825,7 +608,7 @@ document.addEventListener('click', async e => {
   const se = t.closest('[data-sel]');
   if (se) {
     const id = +se.dataset.sel;
-    if (sel === id && !g.sims[id].atWork) centerOn(g.sims[id].x, g.sims[id].y);
+    if (sel === id && !g.sims[id].atWork) centerOn(g.sims[id].x, g.sims[id].y, g.sims[id].lv);
     sel = id;
     hud();
     return;
@@ -834,7 +617,11 @@ document.addEventListener('click', async e => {
   if (cn) { cancel(g, g.sims[sel], +cn.dataset.cancel); hud(); return; }
   const lvb = t.closest('[data-lv]');
   if (lvb) { setLevel(viewLv + +lvb.dataset.lv); return; }
-  if (t.closest('[data-zoom]')) { zoomAt(w / 2, h / 2, v.z * (t.closest('[data-zoom]').dataset.zoom === '+' ? 1.2 : 1 / 1.2)); return; }
+  const zb = t.closest('[data-zoom]');
+  if (zb) { world.zoom(zb.dataset.zoom === '+' ? 1.25 : 0.8); return; }
+  const rb = t.closest('[data-rot]');
+  if (rb) { world.rotate((+rb.dataset.rot * Math.PI) / 4); return; }
+  if (t.closest('[data-walls]')) { setWallMode(); return; }
   if (t.closest('[data-build]')) return build ? closeBuild() : openBuild();
   if (t.closest('[data-jobs]')) return jobsSheet();
   if (t.closest('[data-settings]')) return settingsSheet();
@@ -876,12 +663,10 @@ document.addEventListener('click', async e => {
     return;
   }
   // Schermata di creazione
-  const swb = t.closest('[data-sw]');
-  if (swb) { const [i, k, c] = swb.dataset.sw.split('|'); draft[+i].look[k] = c; createScreen(); return; }
   const gb = t.closest('[data-gender]');
-  if (gb) { const [i, gd] = gb.dataset.gender.split('|'); draft[+i].gender = gd; createScreen(); return; }
-  const lb = t.closest('[data-long]');
-  if (lb) { const d = draft[+lb.dataset.long]; d.look.long = !d.look.long; createScreen(); return; }
+  if (gb) { const [i, gd] = gb.dataset.gender.split('|'); const d = draft[+i]; d.gender = gd; d.look.model = gd === 'lei' ? 'female-a' : 'male-a'; createScreen(); return; }
+  const mb = t.closest('[data-model]');
+  if (mb) { const [i, m] = mb.dataset.model.split('|'); draft[+i].look.model = m; createScreen(); return; }
   if (t.closest('[data-start]')) {
     for (const el of document.querySelectorAll('[data-name]')) draft[+el.dataset.name].name = el.value.trim() || (el.dataset.name === '0' ? 'Io' : 'Lei');
     g = newGame(draft);
@@ -934,6 +719,17 @@ window.appBack = () => {
 };
 
 // ---------------------------------------------------------------- ciclo
+/** Muri: tagliati (si abbassano quelli davanti), tutti giù o tutti su. */
+const WALL_MODES = [['cut', '🏠', 'Muri tagliati'], ['down', '⬇️', 'Muri giù'], ['up', '🧱', 'Muri su']];
+function setWallMode(m) {
+  const i = m ? WALL_MODES.findIndex(x => x[0] === m) : (WALL_MODES.findIndex(x => x[0] === world.wallMode) + 1) % WALL_MODES.length;
+  const [id, icon, text] = WALL_MODES[Math.max(0, i)];
+  world.wallMode = id;
+  $('[data-walls]').textContent = icon;
+  if (!m) toast(text);
+  try { localStorage.setItem('walls', id); } catch { /* niente */ }
+}
+
 let last = 0, hudT = 0;
 function frame(t) {
   requestAnimationFrame(frame);
@@ -941,7 +737,8 @@ function frame(t) {
   last = t;
   if (!g) return;
   if (!build && g.speed) tick(g, dt * SPEEDS[g.speed], notify);
-  draw();
+  world.render(g, { viewLv, sel, build, mood: mood(g.sims[sel], g), canPlace: p => canPlace(g, p, p.moveId) }, dt);
+  drawLabels();
   hudT -= dt;
   if (hudT <= 0) { hudT = 0.25; hud(); }
 }
@@ -951,17 +748,22 @@ function startCreate() {
   createScreen();
 }
 
-// Avvio
+// Avvio: prima i modelli 3D (la prima volta si scaricano, poi restano nel telefono)
+world = createWorld(canvas, FLOORS);
 addEventListener('resize', () => { resize(); });
 resize();
+await loadModels(p => { $('#loadbar').style.width = `${Math.round(p * 100)}%`; });
+$('#loading').hidden = true;
+setWallMode((() => { try { return localStorage.getItem('walls'); } catch { return null; } })() ?? 'cut');
 const saved = await getSetting('save', null);
 if (saved) {
   g = migrate(saved);
+  for (const s of g.sims) s.look = { ...s.look, model: modelOf(s) };
   relink();
   startView();
   hud();
 } else startCreate();
-if (location.hostname === 'localhost') window.__gl = { get g() { return g; }, tick, notify, v, hit, get build() { return build; } };   // solo per le prove in locale
+if (location.hostname === 'localhost') window.__gl = { get g() { return g; }, tick, notify, world, hit, get build() { return build; }, frame };   // solo per le prove in locale
 requestAnimationFrame(frame);
 navigator.storage?.persist?.().catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

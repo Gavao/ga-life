@@ -14,9 +14,12 @@
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }</script>
 </head>
 <body>
   <canvas id="canvas"></canvas>
+  <div id="labels"></div>
+  <div id="loading"><b>GA Life</b><div class="loadbar"><i id="loadbar"></i></div><small>Carico la casa in 3D…</small></div>
 
   <!-- In alto: ora e giorno, velocità del tempo, soldi -->
   <header id="top">
@@ -29,7 +32,8 @@
   </header>
   <button id="goal" data-goals hidden></button>
   <div id="portraits"></div>
-  <div id="zoom"><button data-zoom="+" aria-label="Avvicina">+</button><button data-zoom="-" aria-label="Allontana">−</button></div>
+  <div id="zoom"><button data-zoom="+" aria-label="Avvicina">+</button><button data-zoom="-" aria-label="Allontana">−</button>
+    <button data-rot="1" aria-label="Ruota a sinistra">⟲</button><button data-rot="-1" aria-label="Ruota a destra">⟳</button><button data-walls aria-label="Muri">🏠</button></div>
   <div id="levels"><button data-lv="1" aria-label="Piano di sopra">▲</button><span id="lvName">Piano terra</span><button data-lv="-1" aria-label="Piano di sotto">▼</button></div>
 
   <!-- In basso: bisogni del Sim selezionato (o il negozio in modalità Arreda) e i pulsanti -->
