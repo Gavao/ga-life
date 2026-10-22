@@ -77,6 +77,8 @@ const A = {
   compiti: { id: 'compiti', label: 'Fai i compiti', emoji: '📝', dur: 45, gain: { svago: -5 }, skill: 'logica', special: 'compiti', kidOnly: true, pose: 'sit' },
   giocattoli: { id: 'giocattoli', label: 'Gioca con i giocattoli', emoji: '🧸', dur: 40, gain: { svago: 45, socialita: 5 }, kidOnly: true, skill: 'creativita' },
   riempi: { id: 'riempi', label: 'Riempi la ciotola', emoji: '🥣', dur: 4, gain: {}, special: 'riempi' },
+  festa: { id: 'festa', label: 'Festeggia il compleanno', emoji: '🎂', dur: 20, gain: { svago: 30, socialita: 20 }, special: 'festa' },
+  fetta: { id: 'fetta', label: 'Mangia una fetta di torta', emoji: '🍰', dur: 10, gain: { fame: 30, svago: 8 }, special: 'fetta' },
   // In città
   cena: { id: 'cena', label: 'Ordina la cena (30 €)', emoji: '🍝', dur: 50, gain: { fame: 90, svago: 22, socialita: 12, vescica: -10 }, pose: 'sit', cost: 30 },
   aperitivo: { id: 'aperitivo', label: 'Ordina un aperitivo (12 €)', emoji: '🍸', dur: 25, gain: { svago: 25, socialita: 10, fame: 10, vescica: -12 }, cost: 12 },
@@ -725,6 +727,10 @@ export const TYPES = {
     },
   },
   // ---------------- Famiglia
+  torta: {
+    name: 'Torta di compleanno', cat: null, price: 0, w: 1, d: 1, actions: ['festa', 'fetta'], shop: false,
+    draw(ctx, v, o) { pb(ctx, v, o, 0.25, 0.25, 0.5, 0.5, 14, '#fbcfe8'); },
+  },
   culla: {
     name: 'Culla', cat: 'Famiglia', price: 250, w: 1, d: 1, actions: [], crib: true, amb: 1,
     draw(ctx, v, o) { pb(ctx, v, o, 0.1, 0.1, 0.8, 0.8, 22, '#fde68a'); },

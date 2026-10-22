@@ -7,9 +7,9 @@ import { APP_VERSION } from './version.js';
 import { createWorld, loadModels, portrait, CHAR_MODELS } from './world3d.js';
 import { TYPES, CATS, NEEDS, SKILLS, SOCIAL, ACTIONS, footprint } from './catalog.js';
 import { newGame, tick, order, cancel, actionsFor, mood, moodlets, ambiente, canPlace, crossesWall, timeText, dayText, SPEEDS, CAREERS, oa,
-  migrate, gameEvent, currentGoal, GOALS, WISHES, wkey, exitTile, floorAt, stairEnds, LEVELS, relOf } from './game.js';
+  migrate, gameEvent, currentGoal, GOALS, WISHES, wkey, exitTile, floorAt, stairEnds, LEVELS, relOf, inFamily } from './game.js';
 import { PLACES, isOpen, travel, invite, travelCost, hours } from './town.js';
-import { STAGES, startWedding, WEDDING_COST, adopt, PETS, PET_ACTIONS, WEATHER } from './family.js';
+import { STAGES, startWedding, WEDDING_COST, adopt, PETS, PET_ACTIONS, WEATHER, orderCake, birthdays, nextLabel } from './family.js';
 
 const $ = sel => document.querySelector(sel);
 const canvas = $('#canvas');
@@ -242,7 +242,7 @@ function tap(sx, sy) {
       return;
     }
     // In famiglia: con il partner anche romanticismo, proposta e bebè; con i figli giochi e compiti
-    const p = t.sim, withKid = s.kid || p.kid;
+    const p = t.sim, withKid = s.kid || p.kid || inFamily(s) || inFamily(p);   // con i figli (anche grandi) niente romanticismo
     const ROMANCE = ['bacia', 'balliamo', 'proponi', 'bambino'];
     const acts = SOCIAL.filter(a => !a.hidden && (withKid ? !ROMANCE.includes(a.id) && !a.couple && (a.id !== 'aiutaCompiti' || (p.kid && !s.kid)) : !a.kid)
       && (a.id !== 'proponi' || g.couple.stage === 'insieme') && (a.id !== 'bambino' || !g.pregnancy));
@@ -292,6 +292,7 @@ function phoneMenu(sx, sy) {
       const msg = startWedding(g, notify);
       if (msg) toast(msg); else save();
     } }] : []),
+    ...(!away && !g.sims[sel].kid ? [{ label: '🎂 Ordina una torta di compleanno (40 €)', run: () => { const msg = orderCake(g, g.sims[sel], notify); if (msg) toast(msg); else save(); } }] : []),
     ...(!away && !g.sims[sel].kid ? Object.entries(PETS).map(([k, P]) => ({ label: `${P.emoji} Adotta un ${P.name.toLowerCase()} (${P.price} €)`, run: () => { const msg = adopt(g, k, notify); if (msg) toast(msg); else save(); } })) : []),
     ...broken.map(o => ({ label: `🔧 Chiama il tecnico per: ${TYPES[o.type].name} (150 €)`, run: () => {
       if (g.money < 150) return toast('Non avete abbastanza soldi.');
@@ -579,7 +580,7 @@ function jobsSheet(simId = sel) {
   const job = s.job && CAREERS[s.job.career];
   const skillName = id => SKILLS.find(k => k[0] === id);
   sheet.innerHTML = `<div class="sheet-head"><h2>💼 Lavoro di ${esc(s.name)}</h2><button class="icon" data-close>✕</button></div>
-    ${s.kid ? `<div class="jobnow"><b>🎒 Scuola · ${esc(job.titles[s.job.level])}</b><small>Dal lunedì al venerdì, 8:00-14:00 (scuolabus alle 7:30)</small><div class="bar"><i style="width:${Math.max(0, s.job.perf)}%"></i></div><small>Per un voto migliore: compiti (alla scrivania o alla libreria), aiuto dei genitori e buon umore.</small></div>` : job ? `<div class="jobnow"><b>${job.emoji} ${esc(job.titles[s.job.level])}</b><small>${job.name} · ${job.start}:00-${job.end}:00 · ${job.days.map(d => ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'][d]).join(' ')}
+    ${s.kid ? `<div class="jobnow"><b>🎒 ${job.name} · ${esc(job.titles[s.job.level])}</b><small>Dal lunedì al venerdì, ${job.start}:00-${job.end}:00 (scuolabus alle ${job.start - 1}:30)</small><div class="bar"><i style="width:${Math.max(0, s.job.perf)}%"></i></div><small>Per un voto migliore: compiti (alla scrivania o alla libreria), aiuto dei genitori e buon umore.</small></div>` : job ? `<div class="jobnow"><b>${job.emoji} ${esc(job.titles[s.job.level])}</b><small>${job.name} · ${job.start}:00-${job.end}:00 · ${job.days.map(d => ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'][d]).join(' ')}
       · ${job.pay[s.job.level]} € l'ora</small>
       <div class="bar"><i style="width:${Math.max(0, s.job.perf)}%"></i></div><small>Verso la promozione: vai al lavoro di buon umore${job.skill ? ` e allena ${skillName(job.skill)[1]} ${skillName(job.skill)[2].toLowerCase()} (${s.skills[job.skill].toFixed(1)})` : ''}.</small>
       <button class="secondary" data-quit>Licenziati</button></div>` : '<p class="note">Scegli un lavoro: mezz\'ora prima dell\'inizio il Sim esce di casa da solo e torna con lo stipendio.</p>'}
@@ -645,6 +646,18 @@ function goalsSheet() {
   if (!sheet.open) sheet.showModal();
 }
 
+// ---------------------------------------------------------------- album dei ricordi
+function albumSheet() {
+  const next = birthdays(g).slice(0, 3);
+  const when = at => { const d = Math.max(0, Math.round((at - (g.day * 1440 + g.minute)) / 1440)); return d === 0 ? 'oggi' : d === 1 ? 'domani' : `tra ${d} giorni`; };
+  sheet.innerHTML = `<div class="sheet-head"><h2>📸 Album dei ricordi</h2><button class="icon" data-close>✕</button></div>
+    ${next.length ? `<h3>Prossimi compleanni</h3>${next.map(b => `<p>🎂 <b>${esc(b.name)}</b> diventa ${nextLabel(b)} ${when(b.at)}</p>`).join('')}
+      <p class="note">Ordinate una torta dal telefono (tocca il tuo Sim) e festeggiate: chi compie gli anni cresce subito, con la festa.</p>` : ''}
+    <h3>La vostra storia</h3>
+    <div class="album">${[...(g.memories ?? [])].reverse().map(m => `<div class="memory"><span>${m.emoji}</span><span><b>${esc(m.text)}</b><small>Giorno ${m.day + 1}</small></span></div>`).join('') || '<p class="note">Ancora nessun ricordo.</p>'}</div>`;
+  if (!sheet.open) sheet.showModal();
+}
+
 // ---------------------------------------------------------------- impostazioni
 function settingsSheet() {
   sheet.innerHTML = `<div class="sheet-head"><h2>⚙ Impostazioni</h2><button class="icon" data-close>✕</button></div>
@@ -655,6 +668,7 @@ function settingsSheet() {
       <p>👨‍👩‍👧 Famiglia: con il rapporto sopra l'80% fate la proposta (toccate l'altro Sim), poi organizzate il matrimonio dal telefono. "Provate ad avere un bambino": il neonato sta nella culla (tocca la culla per biberon, pannolino, coccole, ninna nanna) e dopo tre giorni diventa un bambino che va a scuola. Dal telefono si adotta un cane o un gatto: ciotola e cuccia sono in Arreda → Famiglia.</p>
       <p>🗺️ Città: uscite al parco, in palestra, al ristorante, al locale o in biblioteca. Toccate la gente per chiacchierare: chi diventa amico (🤝) si può invitare a casa dal telefono (tocca il tuo Sim).</p>
       <p>Un dito sposta la vista, due dita fanno lo zoom e ruotano la casa (anche ⟲ ⟳); 🏠 abbassa o alza i muri. ⏸ ▶ ▶▶ ▶▶▶ cambiano la velocità del tempo; quando l'app è chiusa il tempo si ferma.</p></details>
+    <button class="secondary wide" data-album>📸 Album dei ricordi</button>
     <h3>Partita</h3>
     <button class="secondary wide" data-newgame>Ricomincia da capo</button>
     <p class="note">Versione ${esc(APP_VERSION)}${native ? ` · app Android ${esc(native.appVersion?.() ?? '')}` : ''}. La partita resta solo su questo telefono.</p>
@@ -726,6 +740,7 @@ document.addEventListener('click', async e => {
   const inv = t.closest('[data-invite]');
   if (inv) { const msg = invite(g, inv.dataset.invite, notify); if (msg) toast(msg); else { sheet.close(); save(); } return; }
   if (t.closest('[data-settings]')) return settingsSheet();
+  if (t.closest('[data-album]')) return albumSheet();
   const bt = t.closest('[data-btab]');
   if (bt) { build.tab = bt.dataset.btab; build.tool = null; build.placing = null; buildPanel(); return; }
   const tl = t.closest('[data-tool]');

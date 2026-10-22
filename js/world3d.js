@@ -353,6 +353,14 @@ const BUILD = {
     const top = b.cyl(0.5, 0.5, 0.35, 0.5, '#facc15', 1.1, { emissive: '#f59e0b' }); top.rotation.x = Math.PI / 2; top.position.y = 1.1; top.scale.set(0.35, 0.5, 0.35);
     b.box(0.5, 0.76, 0.5, 0.02, 0.4, '#38bdf8', 0.5, { emissive: '#0ea5e9' });
   },
+  torta: b => {
+    const t = b.m('sideTable', { smax: 1.4 });
+    if (!b.o.party || (b.o.slices ?? 4) >= 4) {
+      b.cyl(0.5, 0.5, 0.2, 0.12, '#fbcfe8', t.top); b.cyl(0.5, 0.5, 0.15, 0.1, '#f9a8d4', t.top + 0.12); b.cyl(0.5, 0.5, 0.155, 0.015, '#f8fafc', t.top + 0.22);
+      if (!b.o.party) for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2; b.cyl(0.5 + Math.cos(a) * 0.09, 0.5 + Math.sin(a) * 0.09, 0.008, 0.06, '#60a5fa', t.top + 0.23); b.ball(0.5 + Math.cos(a) * 0.09, 0.5 + Math.sin(a) * 0.09, 0.013, '#fde68a', t.top + 0.3, { emissive: '#f59e0b' }); }
+    } else b.cyl(0.5, 0.5, 0.18, 0.1, '#fbcfe8', t.top).scale.x = 0.05 + 0.18 * (b.o.slices ?? 1) / 4;
+    b.cyl(0.32, 0.72, 0.06, 0.01, '#ffffff', t.top);
+  },
   culla: b => {
     b.box(0.5, 0.5, 0.8, 0.55, 0.35, '#fde68a', 0.25);
     b.box(0.5, 0.5, 0.72, 0.47, 0.08, '#f8fafc', 0.55);
@@ -614,7 +622,7 @@ export function createWorld(canvas, FLOORS) {
     const seen = new Set();
     for (const o of g.objects) {
       seen.add(o.id);
-      const sig = `${o.type}|${o.x}|${o.y}|${o.rot}|${o.color}|${o.lv}|${o.baby?.model ?? ""}|${(o.food ?? 0) > 0}`;
+      const sig = `${o.type}|${o.x}|${o.y}|${o.rot}|${o.color}|${o.lv}|${o.baby?.model ?? ""}|${(o.food ?? 0) > 0}|${o.party ? o.slices : ""}`;
       let r = objs.get(o.id);
       if (!r || r.sig !== sig) {
         if (r) objRoot.remove(r.group);
@@ -657,7 +665,7 @@ export function createWorld(canvas, FLOORS) {
   function simRec(s) {
     const model = modelOf(s);
     let r = sims.get(s.id);
-    const k = s.kid ? 0.62 : 1;   // i bambini sono più piccoli
+    const k = s.kid ? (s.teen ? 0.82 : 0.62) : 1;   // bambini e ragazzi sono più piccoli
     if (r && r.model === model && r.k === k) return r;
     if (r) simRoot.remove(r.root);
     const gl = ready['c:' + model];

@@ -146,12 +146,14 @@ export function travel(g, place, notify) {
     if (!isOpen(place, g.minute)) return `${PLACES[place].name}: è chiuso (orari ${hours(place)}).`;
     if (!team.length) return 'Sono tutti al lavoro.';
   }
-  const cost = place === 'casa' && !g.town.at ? 0 : travelCost(g);
+  const sitter = place !== 'casa' && !g.town.at && homeObjects(g).some(o => o.baby) ? 30 : 0;   // il neonato resta con la babysitter
+  const cost = (place === 'casa' && !g.town.at ? 0 : travelCost(g)) + sitter;
   if (cost && g.money < cost) return 'Non avete i soldi per il taxi.';
   g.money -= cost;
   if (!g.town.at) g.town.home = { objects: g.objects, levels: g.levels, dishes: g.dishes, exit: g.exit };
   g.sims = g.sims.filter(s => !s.npc);   // la gente del posto (o gli ospiti) resta lì
-  const how = cost ? `in taxi (−${cost} €)` : 'in auto';
+  const how = cost - sitter ? `in taxi (−${cost - sitter} €)` : 'in auto';
+  if (sitter) notify(`🍼 La babysitter resta a casa con il bebè (−${sitter} €).`);
   if (place === 'casa') {
     Object.assign(g, { objects: g.town.home.objects, levels: g.town.home.levels, dishes: g.town.home.dishes, exit: g.town.home.exit });
     g.town.home = null;

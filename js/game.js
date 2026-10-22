@@ -2,12 +2,13 @@
 // collegati dalle scale, lavoro (a piedi o in auto), rapporto di coppia, ambiente, stati d'animo, piatti
 // sporchi, pulizie, guasti, incendi, ladri, posta e bollette, pizza a domicilio e "libero arbitrio".
 import { TYPES, ACTIONS, SOCIAL, NEEDS, footprint, point } from './catalog.js';
-import { familyTick, proposal, tryBaby, wedding, petDone, PET_ACTIONS } from './family.js';
+import { familyTick, proposal, tryBaby, wedding, petDone, PET_ACTIONS, celebrate, remember } from './family.js';
 
 export const DAYS = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
 export const SPEEDS = [0, 2, 8, 30];   // minuti di gioco al secondo: pausa, normale, veloce, velocissimo
 export const LEVELS = [[-1, 'Tavernetta'], [0, 'Piano terra'], [1, 'Primo piano']];
 const WALK = 1.6;                       // caselle per minuto di gioco
+const TEEN_NO = new Set(['drink', 'aperitivo', 'lavoro', 'giocattoli']);
 const KID_NO = new Set(['cucina', 'grigliata', 'lavoretti', 'mobiletto', 'drink', 'aperitivo', 'pesi', 'allenati', 'ripara', 'spegni', 'paga', 'lavoro', 'programma', 'riempi', 'dipingi']);
 
 // Quanto scende ogni bisogno in un'ora di gioco (a casa e al lavoro)
@@ -25,6 +26,8 @@ export const CAREERS = {
     titles: ['Commesso', 'Addetto vendite', 'Capo reparto', 'Vice direttore', 'Direttore del negozio'] },
   artista: { name: 'Artista', emoji: '🎨', start: 11, end: 17, days: [0, 2, 4, 5], pay: [12, 18, 27, 40, 60], skill: 'creativita',
     titles: ['Artista di strada', 'Illustratore', 'Pittore', 'Artista affermato', 'Maestro d\'arte'] },
+  liceo: { name: 'Liceo', emoji: '🎒', start: 8, end: 15, days: [0, 1, 2, 3, 4], pay: [0, 0, 0, 0, 0], skill: 'logica', school: true,
+    titles: ['Voto 5', 'Voto 6', 'Voto 7', 'Voto 8', 'Voto 10'] },
   scuola: { name: 'Scuola', emoji: '🎒', start: 8, end: 14, days: [0, 1, 2, 3, 4], pay: [0, 0, 0, 0, 0], skill: 'logica', school: true,
     titles: ['Voto 5', 'Voto 6', 'Voto 7', 'Voto 8', 'Voto 10'] },
   meccanico: { name: 'Meccanico', emoji: '🔧', start: 8, end: 16, days: [0, 1, 2, 3, 4], pay: [14, 20, 27, 36, 48], skill: 'manualita',
@@ -103,6 +106,7 @@ export function newGame(simsInfo) {
     rel: 60, bills: 7, bill: null, power: true, auto: true, wishDay: -1, goals: { done: [] }, dishes: [], exit: [DOOR_X, H - 1],
     town: newTown(), couple: { stage: 'insieme' }, pets: [],
   };
+  g.memories = [{ day: 0, emoji: '🏡', text: `${sims.map(s => s.name).join(' e ')} vanno a vivere insieme` }];
   rollWishes(g);
   return g;
 }
@@ -151,6 +155,8 @@ export function migrate(g) {
   g.town ??= newTown();
   g.couple ??= { stage: 'insieme' };
   g.pets ??= [];
+  g.memories ??= [];
+  for (const s of g.sims) if (s.kid) s.since ??= g.day * 1440 + g.minute;
   for (const o of g.town.home?.objects ?? []) o.users = [];
   g.dishes ??= [];
   for (const d of g.dishes) d.lv ??= 0;
@@ -176,6 +182,8 @@ export const dayText = g => `${DAYS[g.day % 7]} · giorno ${g.day + 1}`;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const other = (g, sim) => g.sims.find(s => s !== sim && !s.npc && !s.kid);   // l'altro della coppia (o un genitore)
 /** Oggetti di casa vostra (anche quando siete fuori, in città). */
+/** Figli nati in casa (bambini, ragazzi o già grandi): non sono la coppia. */
+export const inFamily = s => !s.npc && s.id > 1;
 export const homeObjects = g => (g.town?.at ? g.town.home.objects : g.objects);
 
 // ---------------------------------------------------------------- gente della città e amici
@@ -191,14 +199,14 @@ export function makeNpc(p, x, y, extra = {}) {
 }
 /** Amicizia tra due Sim: per la coppia è il rapporto, con gli altri l'amicizia (0-100). */
 export function relOf(g, a, b) {
-  if (a.kid || b.kid) return 100;   // in famiglia ci si vuole bene
+  if (inFamily(a) || inFamily(b)) return 100;   // figli (anche grandi): in famiglia ci si vuole bene
   const n = a.npc ? a : b.npc ? b : null;
   if (!n) return g.rel;
   if (a.npc && b.npc) return 50;
   return g.town.friends[n.key]?.rel ?? 0;
 }
 function addRel(g, a, b, v, notify) {
-  if (a.kid || b.kid) return;
+  if (inFamily(a) || inFamily(b)) return;
   const n = a.npc ? a : b.npc ? b : null;
   if (!n) { g.rel = clamp(g.rel + v, 0, 100); return; }
   if (a.npc && b.npc) return;
@@ -207,6 +215,7 @@ function addRel(g, a, b, v, notify) {
   f.rel = clamp(f.rel + v, 0, 100);
   const you = a.npc ? b : a;
   if (before < 30 && f.rel >= 30) {
+    remember(g, '🤝', `${you.name} ha conosciuto ${n.name}: ora sono amici`);
     notify(`🤝 ${you.name} e ${n.name} sono diventati amici! Potete invitar${n.gender === 'lei' ? 'la' : 'lo'} a casa dal telefono (tocca il tuo Sim).`);
     gameEvent(g, you, 'amico', notify);
   }
@@ -418,8 +427,9 @@ export function actionsFor(g, sim, o) {
   if (T.elec && !g.power) return [];
   if (T.mailbox) return g.bill ? [ACTIONS.paga] : [];
   if (T.crib) return o.baby && !sim.kid && !sim.npc ? [ACTIONS.biberon, ACTIONS.pannolino, ACTIONS.coccole, ACTIONS.ninna] : [];
+  if (o.type === 'torta') return o.party ? [ACTIONS.fetta] : [ACTIONS.festa];
   // I bambini non cucinano, non lavorano e non bevono; i compiti e i giocattoli sono solo loro
-  const list = T.actions.map(id => ACTIONS[id]).filter(a => (sim.kid ? !KID_NO.has(a.id) : !a.kidOnly) && !(sim.npc && a.kidOnly));
+  const list = T.actions.map(id => ACTIONS[id]).filter(a => (sim.kid ? !(sim.teen ? TEEN_NO : KID_NO).has(a.id) : !a.kidOnly) && !(sim.npc && a.kidOnly));
   if (T.eat) list.push({ id: 'siediTavolo', label: 'Siediti al tavolo', emoji: '🪑', dur: 20, gain: { energia: 2 }, pose: 'sit' });
   if ((o.dirt ?? 0) >= 2 && T.dirties) list.push(ACTIONS.pulisci);
   return list;
@@ -671,6 +681,7 @@ function backFromWork(g, sim, job, notify) {
       g.money += 50;
     } else {
       text = `🎉 ${sim.name} è stat${oa(sim)} promoss${oa(sim)}: ${job.titles[sim.job.level]}! (+${pay} €)`;
+      remember(g, '🎉', `${sim.name} è diventat${oa(sim)} ${job.titles[sim.job.level]}`);
       addMood(g, sim, 'promosso', '🎉', 'Promoss' + oa(sim) + '!', 15, 24 * 60);
       gameEvent(g, sim, 'promo', notify);
     }
@@ -900,7 +911,7 @@ function finishAction(g, sim, c, notify) {
     notify(`🪚 ${sim.name} ha venduto il mobiletto che ha costruito: +${price} €`);
   }
   // Famiglia: compiti, proposta, bebè, matrimonio, ciotola, animali
-  if (c.special === 'compiti' && sim.job?.career === 'scuola') { sim.job.perf += 15; if (c.by !== 'auto') notify(`📝 ${sim.name} ha finito i compiti.`); }
+  if (c.special === 'compiti' && CAREERS[sim.job?.career]?.school) { sim.job.perf += 15; if (c.by !== 'auto') notify(`📝 ${sim.name} ha finito i compiti.`); }
   const lead = c.social && !c.follower ? g.sims.find(s => s.id === c.partner) : null;
   if (lead) {
     const kid = [sim, lead].find(s => s.kid);
@@ -909,6 +920,8 @@ function finishAction(g, sim, c, notify) {
     if (c.special === 'bambino') tryBaby(g, sim, lead, notify);
     if (c.special === 'sposa') wedding(g, sim, lead, notify);
   }
+  if (c.special === 'festa' && o && !o.party) celebrate(g, sim, o, notify);
+  if (c.special === 'fetta' && o) { o.slices = (o.slices ?? 1) - 1; if (o.slices <= 0) g.objects = g.objects.filter(x => x !== o); }
   if (c.special === 'riempi' && o) { o.food = 12; if (c.by !== 'auto') notify('🥣 Ciotola piena: gli animali mangiano da soli.'); }
   if (c.pet) petDone(g, sim, c, notify);
   if (c.special === 'pulisci' && o) { o.dirt = 0; if (c.by !== 'auto') notify(`🧽 ${T.name}: pulito e splendente.`); }
@@ -1006,7 +1019,7 @@ function autonomy(g, sim) {
         if (!T.actions.includes(a.id)) continue;
         let gain = (a.gain?.[need] ?? 0) * (T.q ?? 1);
         if (a.then === 'mangia' && need === 'fame') gain = 65 * (T.q ?? 1);
-        if (a.special && a.special !== 'pizza') gain = 0;
+        if (a.special && a.special !== 'pizza' && a.special !== 'fetta') gain = 0;
         if (gain > 0 && (!best || gain > best.gain)) best = { o, a, gain };
       }
     }

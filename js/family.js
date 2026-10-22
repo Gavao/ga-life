@@ -18,6 +18,7 @@ export function proposal(g, sim, p, moodOf, notify) {
   if (g.rel >= 80 && moodOf(p) >= 45) {
     g.couple = { stage: 'fidanzati', since: now(g) };
     for (const s of [sim, p]) addMood(g, s, 'fidanzati', '💍', 'Fidanzati!', 20, 2 * 1440);
+    remember(g, '💍', `${sim.name} e ${p.name} si sono fidanzati`);
     notify(`💍 ${p.name} ha detto SÌ! ${sim.name} e ${p.name} sono fidanzati. Organizzate il matrimonio dal telefono (tocca il tuo Sim).`);
     gameEvent(g, sim, 'proposta', notify);
   } else {
@@ -53,6 +54,7 @@ export function wedding(g, sim, p, notify) {
   g.money += gifts;
   g.party = { kind: 'matrimonio', until: now(g) + 120, guests: g.party?.guests ?? 0, confetti: true };
   for (const s of [sim, p]) addMood(g, s, 'sposi', '💒', 'Appena sposati', 25, 3 * 1440);
+  remember(g, '💒', `${sim.name} e ${p.name} si sono sposati`);
   notify(`💒 ${sim.name} e ${p.name} sono marito e moglie! Evviva gli sposi!${gifts ? ` Regali degli invitati: +${gifts} €` : ''}`);
   gameEvent(g, sim, 'matrimonio', notify);
 }
@@ -91,12 +93,12 @@ function birth(g, notify) {
   const mom = g.sims.find(s => s.id === g.pregnancy.sim);
   g.pregnancy = null;
   for (const s of parents(g)) addMood(g, s, 'genitori', '👶', 'Genitori felici', 20, 2 * 1440);
+  remember(g, '👶', `È nat${gender === 'lei' ? 'a' : 'o'} ${name}`);
   notify(`👶 È nat${gender === 'lei' ? 'a' : 'o'} ${name}! Benvenut${gender === 'lei' ? 'a' : 'o'} in famiglia${mom ? `, ${mom.name} sta benissimo` : ''}. Tocca la culla per prendervene cura.`);
   notify('__baby__' + crib.id);
   gameEvent(g, null, 'bambino', notify);
 }
 const BABY_DECAY = { fame: 9, igiene: 6, energia: 5, socialita: 6 };
-const GROW = 3 * 1440;   // dopo tre giorni il neonato diventa un bambino
 function babies(g, dt, notify) {
   for (const o of g.objects) {
     const b = o.baby;
@@ -105,10 +107,9 @@ function babies(g, dt, notify) {
     const low = Object.values(b.needs).some(v => v < 15);
     if (low && !b.cried) { b.cried = true; notify(`😭 ${b.name} piange! Tocca la culla.`); for (const s of parents(g)) addMood(g, s, 'pianto', '😭', 'Il bimbo piange', -8, 60); }
     if (!low) b.cried = false;
-    if (now(g) - b.born >= GROW) growUp(g, o, notify);
   }
 }
-function growUp(g, crib, notify) {
+function growUp(g, crib, notify, party = false) {
   const b = crib.baby;
   crib.baby = null;
   const household = g.sims.filter(s => !s.npc);
@@ -118,11 +119,93 @@ function growUp(g, crib, notify) {
     needs: { fame: 80, energia: 80, igiene: 80, vescica: 80, svago: 70, socialita: 70 },
     x: crib.x + 0.5, y: crib.y + 1.5, lv: crib.lv ?? 0, path: [], queue: [], cur: null, face: 1, walk: 0,
     skills: { cucina: 0, fitness: 0, logica: 0, creativita: 0, carisma: 0, manualita: 0 }, job: { career: 'scuola', level: 1, perf: 0, days: 0 },
-    atWork: false, alerted: {}, idle: 0, wishes: [], moodlets: [],
+    atWork: false, alerted: {}, idle: 0, wishes: [], moodlets: [], since: now(g),
   };
   g.sims.splice(id, 0, kid);   // i Sim di famiglia stanno prima della gente in visita (l'indice è il loro numero)
   for (let i = 0; i < g.sims.length; i++) if (!g.sims[i].npc) g.sims[i].id = i;
   notify(`🎂 ${b.name} è cresciut${b.gender === 'lei' ? 'a' : 'o'}: adesso è un${b.gender === 'lei' ? 'a bambina' : ' bambino'}! Dal lunedì al venerdì va a scuola (8-14): aiutate${b.gender === 'lei' ? 'la' : 'lo'} con i compiti.`);
+  remember(g, '🧒', `${b.name} è diventat${b.gender === 'lei' ? 'a una bambina' : 'o un bambino'}`);
+  if (party) addMood(g, kid, 'compleanno', '🎂', 'Che bel compleanno!', 20, 1440);
+}
+
+// ---------------------------------------------------------------- età, compleanni e ricordi
+const AGE_DAYS = { neonato: 3, bambino: 5, ragazzo: 7 };   // giorni prima del compleanno che fa cambiare età
+/** Un ricordo per l'album di famiglia. */
+export function remember(g, emoji, text) {
+  g.memories ??= [];
+  g.memories.push({ day: g.day, emoji, text });
+  if (g.memories.length > 80) g.memories.shift();
+}
+/** Chi compie gli anni prossimamente: [{ who (Sim o culla), name, next (età), at (minuto) }], il più vicino prima. */
+/** "una bambina", "un ragazzo", "grande": la prossima età detta bene. */
+export function nextLabel(b) {
+  const lei = (b.sim?.gender ?? b.crib?.baby?.gender) === 'lei';
+  return b.next === 'adulto' ? 'grande' : b.next === 'bambino' ? (lei ? 'una bambina' : 'un bambino') : lei ? 'una ragazza' : 'un ragazzo';
+}
+export function birthdays(g) {
+  const list = [];
+  for (const o of g.objects) if (o.baby) list.push({ crib: o, name: o.baby.name, next: 'bambino', at: o.baby.born + AGE_DAYS.neonato * 1440 });
+  for (const s of g.sims) if (s.kid) list.push({ sim: s, name: s.name, next: s.teen ? 'adulto' : 'ragazzo', at: (s.since ?? now(g)) + AGE_DAYS[s.teen ? 'ragazzo' : 'bambino'] * 1440 });
+  return list.sort((a, b) => a.at - b.at);
+}
+function ageUp(g, b, notify, party = false) {
+  if (b.crib) { growUp(g, b.crib, notify, party); return; }
+  const s = b.sim;
+  s.since = now(g);
+  if (!s.teen) {
+    s.teen = true;
+    s.job = { career: 'liceo', level: s.job?.level ?? 1, perf: 0, days: 0 };
+    notify(`🎂 ${s.name} è diventat${s.gender === 'lei' ? 'a una ragazza' : 'o un ragazzo'}! Adesso va al liceo (8-15) e può anche cucinare.`);
+    remember(g, '🎂', `${s.name} è diventat${s.gender === 'lei' ? 'a una ragazza' : 'o un ragazzo'}`);
+  } else {
+    s.kid = false;
+    s.teen = false;
+    s.job = null;
+    notify(`🎓 ${s.name} è diventat${s.gender === 'lei' ? 'a adulta' : 'o adulto'}! Adesso può cercarsi un lavoro (💼 Lavoro).`);
+    remember(g, '🎓', `${s.name} è diventat${s.gender === 'lei' ? 'a adulta' : 'o adulto'}`);
+  }
+  if (party) addMood(g, s, 'compleanno', '🎂', 'Che bel compleanno!', 20, 1440);
+}
+/** Festa di compleanno con la torta: chi è più vicino al compleanno cresce subito, con coriandoli per tutti. */
+export function celebrate(g, sim, cake, notify) {
+  const b = birthdays(g)[0];
+  if (!b) { notify('🎂 Nessuno compie gli anni… ma la torta è buona lo stesso!'); cake.party = true; cake.slices = 4; return; }
+  notify(`🎉 Tanti auguri a ${b.name}! 🎂`);
+  for (const s of g.sims) if (!s.atWork && !s.npc) addMood(g, s, 'festa', '🎉', 'Che festa!', 12, 360);
+  g.party = { kind: 'compleanno', until: now(g) + 90, confetti: true, guests: 0 };
+  cake.party = true;
+  cake.slices = 4;
+  ageUp(g, b, notify, true);
+}
+/** Torta: ordinata dal telefono, arriva subito accanto a chi l'ha ordinata. */
+export function orderCake(g, sim, notify) {
+  if (g.town.at) return 'Le torte si festeggiano a casa.';
+  if (g.money < 40) return 'Non avete abbastanza soldi.';
+  const o = placeNear(g, sim, 'torta');
+  if (!o) return 'Non c\'è posto per la torta: fate spazio.';
+  g.money -= 40;
+  notify('🎂 È arrivata la torta! Toccala per festeggiare il compleanno.');
+  return null;
+}
+function placeNear(g, near, type) {
+  for (let r = 1; r < 8; r++) {
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const o = { id: uid(), type, x: Math.floor(near.x) + dx, y: Math.floor(near.y) + dy, rot: 0, lv: near.lv, users: [] };
+      if (floorAt(g, o.lv, o.x, o.y) !== 'erba' && canPlace(g, o)) { g.objects.push(o); return o; }
+    }
+  }
+  return null;
+}
+function ages(g, notify) {
+  for (const b of birthdays(g)) {
+    const left = b.at - now(g);
+    const key = (b.crib?.id ?? b.sim.id) + b.next;
+    if (left <= 1440 && left > 0 && !g.reminded?.includes(key)) {
+      (g.reminded ??= []).push(key);
+      notify(`🎂 Domani ${b.name} diventa ${nextLabel(b)}! Ordinate una torta dal telefono per festeggiare.`);
+    }
+    if (left <= 0 && !g.town.at) ageUp(g, b, notify);
+  }
 }
 
 // ---------------------------------------------------------------- animali domestici
@@ -147,6 +230,7 @@ export function adopt(g, kind, notify) {
   const pet = { id: uid(), kind, name: pick(P.names.filter(n => !g.pets.some(p => p.name === n))) ?? P.names[0], color: pick(P.colors), x: ex + 0.5, y: ey - 0.5, lv: 0,
     needs: { fame: 80, svago: 70, igiene: 80 }, path: [], state: 'idle', t: 0, tricks: 0 };
   g.pets.push(pet);
+  remember(g, PETS[kind].emoji, `${pet.name} è entrato in famiglia`);
   notify(`${P.emoji} Benvenut${kind === 'gatto' ? 'o' : 'o'} ${pet.name}! Comprate una ciotola e una cuccia (Arreda → Famiglia). Toccatelo per coccolarlo.`);
   gameEvent(g, null, 'animale', notify);
   return null;
@@ -257,6 +341,7 @@ export function familyTick(g, dt, notify) {
   weather(g);
   if (g.pregnancy && now(g) >= g.pregnancy.due && !g.town.at) birth(g, notify);
   if (!g.town.at) babies(g, dt, notify);
+  ages(g, notify);
   pets(g, dt, notify);
   if (g.party && now(g) >= g.party.until) g.party = null;
   if (g.weather.kind === 'pioggia') for (const s of g.sims) if (!s.npc && !s.atWork && outdoor(g, s)) addMood(g, s, 'bagnato', '🌧️', 'Bagnat' + (s.gender === 'lei' ? 'a' : 'o') + ' dalla pioggia', -6, 90);
