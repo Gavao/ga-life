@@ -95,7 +95,7 @@ const FURNITURE = ['bedDouble', 'bedSingle', 'sideTableDrawers', 'lampRoundTable
   'kitchenCabinetDrawer', 'toaster', 'kitchenSink', 'tableCloth', 'table', 'chairCushion', 'loungeSofa', 'loungeSofaLong', 'loungeChair', 'cabinetTelevision',
   'cabinetTelevisionDoors', 'televisionModern', 'televisionVintage', 'desk', 'computerScreen', 'computerKeyboard', 'chairDesk', 'bookcaseOpen', 'books',
   'sideTable', 'radio', 'speakerSmall', 'pottedPlant', 'plantSmall1', 'lampSquareFloor', 'rugRectangle', 'rugSquare', 'bookcaseOpenLow', 'benchCushion',
-  'kitchenBar', 'stoolBar', 'kitchenCoffeeMachine', 'washer', 'cardboardBoxClosed', 'trashcan', 'coatRackStanding'];
+  'kitchenBar', 'stoolBar', 'kitchenCoffeeMachine', 'washer', 'cardboardBoxClosed', 'trashcan', 'coatRackStanding', 'bear'];
 export async function loadModels(onProgress) {
   const jobs = [
     ...FURNITURE.map(n => ['m:' + n, `models/furniture/${n}.glb`]),
@@ -353,6 +353,34 @@ const BUILD = {
     const top = b.cyl(0.5, 0.5, 0.35, 0.5, '#facc15', 1.1, { emissive: '#f59e0b' }); top.rotation.x = Math.PI / 2; top.position.y = 1.1; top.scale.set(0.35, 0.5, 0.35);
     b.box(0.5, 0.76, 0.5, 0.02, 0.4, '#38bdf8', 0.5, { emissive: '#0ea5e9' });
   },
+  culla: b => {
+    b.box(0.5, 0.5, 0.8, 0.55, 0.35, '#fde68a', 0.25);
+    b.box(0.5, 0.5, 0.72, 0.47, 0.08, '#f8fafc', 0.55);
+    for (const [x, z, w, d] of [[0.1, 0.5, 0.04, 0.55], [0.9, 0.5, 0.04, 0.55], [0.5, 0.22, 0.8, 0.04], [0.5, 0.78, 0.8, 0.04]]) { b.box(x, z, w, d, 0.3, '#fef3c7', 0.6, { opacity: 0.3 }); b.box(x, z, w + 0.02, d + 0.02, 0.04, '#fde68a', 0.9); }
+    for (const [x, z] of [[0.12, 0.25], [0.88, 0.25], [0.12, 0.75], [0.88, 0.75]]) b.box(x, z, 0.05, 0.05, 0.25, '#d6a35c');
+    b.ball(0.5, 0.5, 0.06, '#f472b6', 1.2);
+    b.box(0.5, 0.5, 0.01, 0.01, 0.2, '#e5e7eb', 1.0);
+  },
+  giocattoli: b => {
+    b.box(0.5, 0.5, 0.7, 0.5, 0.35, '#3b82f6');
+    b.ball(0.35, 0.45, 0.1, '#ef4444', 0.4); b.box(0.6, 0.5, 0.18, 0.18, 0.18, '#facc15', 0.35); b.m('bear', { x: 0.5, z: 0.75, s: 0.8, y: 0 });
+  },
+  ciotola: b => {
+    b.cyl(0.5, 0.5, 0.18, 0.08, '#ef4444');
+    b.cyl(0.5, 0.5, 0.14, 0.02, (b.o.food ?? 0) > 0 ? '#92400e' : '#7f1d1d', 0.07);
+    b.cyl(0.25, 0.75, 0.13, 0.06, '#3b82f6'); b.cyl(0.25, 0.75, 0.1, 0.01, '#7dd3fc', 0.06);
+  },
+  cuccia: b => {
+    b.box(0.5, 0.5, 0.85, 0.85, 0.55, '#b45309');
+    const r = b.cone(0.5, 0.5, 0.65, 0.35, '#7f1d1d', 0.55); r.rotation.y = Math.PI / 4; r.scale.set(0.65, 0.35, 0.65);
+    b.box(0.5, 0.93, 0.4, 0.02, 0.35, '#1f2937', 0.05);
+  },
+  tiragraffi: b => {
+    b.box(0.5, 0.5, 0.6, 0.6, 0.06, '#d6d3d1');
+    b.cyl(0.5, 0.5, 0.08, 1.1, '#d6c3a0', 0.06);
+    b.box(0.5, 0.5, 0.45, 0.45, 0.06, '#a8a29e', 1.16);
+    b.ball(0.7, 0.5, 0.06, '#f472b6', 1.0);
+  },
   tavoloRistorante: b => {
     b.m('tableCloth', { w: 1.5, d: 1.0, smax: 2, tint: '#f8fafc' });
     b.m('chairCushion', { x: 1, z: 0.3, s: 1.9, ry: 2, tint: '#991b1b' });
@@ -387,6 +415,17 @@ function buildObject(o) {
   group.add(base);
   const b = maker(base, o, T);
   (BUILD[o.type] ?? (x => x.box(T.w / 2, T.d / 2, T.w * 0.9, T.d * 0.9, 0.8, '#a78bfa')))(b);
+  if (o.baby && ready['c:' + o.baby.model]) {   // il neonato sdraiato nella culla
+    const gl = ready['c:' + o.baby.model];
+    const body = cloneSkinned(gl.scene);
+    const clip = gl.animations.find(c => c.name === 'static');
+    if (clip) { const mx = new THREE.AnimationMixer(body); mx.clipAction(clip).play(); mx.update(0); }
+    body.scale.setScalar(CS * 0.38);
+    body.rotation.x = -Math.PI / 2;
+    body.position.set(0.5, 0.66, 0.68);
+    body.traverse(m => { if (m.isMesh) { m.castShadow = true; m.frustumCulled = false; } });
+    base.add(body);
+  }
   group.rotation.y = ((o.rot ?? 0) * Math.PI) / 2;
   place(group, o);
   group.traverse(m => { m.userData.obj = o.id; });
@@ -575,7 +614,7 @@ export function createWorld(canvas, FLOORS) {
     const seen = new Set();
     for (const o of g.objects) {
       seen.add(o.id);
-      const sig = `${o.type}|${o.x}|${o.y}|${o.rot}|${o.color}|${o.lv}`;
+      const sig = `${o.type}|${o.x}|${o.y}|${o.rot}|${o.color}|${o.lv}|${o.baby?.model ?? ""}|${(o.food ?? 0) > 0}`;
       let r = objs.get(o.id);
       if (!r || r.sig !== sig) {
         if (r) objRoot.remove(r.group);
@@ -618,25 +657,26 @@ export function createWorld(canvas, FLOORS) {
   function simRec(s) {
     const model = modelOf(s);
     let r = sims.get(s.id);
-    if (r && r.model === model) return r;
+    const k = s.kid ? 0.62 : 1;   // i bambini sono più piccoli
+    if (r && r.model === model && r.k === k) return r;
     if (r) simRoot.remove(r.root);
     const gl = ready['c:' + model];
     if (!gl) return null;
     const body = cloneSkinned(gl.scene);
-    body.scale.setScalar(CS);
+    body.scale.setScalar(CS * k);
     body.traverse(m => { if (m.isMesh) { m.castShadow = true; m.frustumCulled = false; } });
     const pivot = new THREE.Group();
     pivot.add(body);
     const root = new THREE.Group();
     root.add(pivot);
     const hitbox = new THREE.Mesh(BOX, HIDDEN);
-    hitbox.scale.set(0.8, 1.4, 0.8);
-    hitbox.position.y = 0.7;
+    hitbox.scale.set(0.8, 1.4 * k, 0.8);
+    hitbox.position.y = 0.7 * k;
     hitbox.userData.sim = s.id;
     root.add(hitbox);
     simRoot.add(root);
     const mixer = new THREE.AnimationMixer(body);
-    r = { model, root, pivot, body, mixer, clips: Object.fromEntries(gl.animations.map(c => [c.name, c])), actions: {}, anim: null, cur: null, heading: 0, px: s.x, py: s.y, speed: 0, t: 0 };
+    r = { model, root, pivot, body, mixer, clips: Object.fromEntries(gl.animations.map(c => [c.name, c])), k, actions: {}, anim: null, cur: null, heading: 0, px: s.x, py: s.y, speed: 0, t: 0 };
     sims.set(s.id, r);
     return r;
   }
@@ -720,11 +760,11 @@ export function createWorld(canvas, FLOORS) {
     r.heading = lerpAngle(r.heading, heading, lie ? 1 : Math.min(1, dt * 10));
     r.root.position.set(x, y, z);
     r.root.rotation.y = r.heading;
-    if (lie) { r.pivot.rotation.x = -Math.PI / 2; r.pivot.position.set(0, 0, 0.62); }
+    if (lie) { r.pivot.rotation.x = -Math.PI / 2; r.pivot.position.set(0, 0, 0.62 * r.k); }
     else { r.pivot.rotation.x = 0; r.pivot.position.set(0, 0, 0); }
     play(r, anim, once, ts);
     r.mixer.update(dt);
-    r.top = lie ? 0.5 : anim === 'sit' ? 1.0 : 1.25;
+    r.top = (lie ? 0.5 : anim === 'sit' ? 1.0 : 1.25) * r.k;
   }
 
   // Piatti, fuoco, sporco, fumo
@@ -793,6 +833,102 @@ export function createWorld(canvas, FLOORS) {
     for (const [k, e] of effects) if (!seen.has(k)) { fx.remove(e); effects.delete(k); }
   }
 
+  // Animali: cane e gatto fatti di forme semplici, con zampe e coda che si muovono
+  const pets = new Map();
+  const petRoot = new THREE.Group();
+  scene.add(petRoot);
+  function buildPet(p) {
+    const dog = p.kind === 'cane';
+    const g = new THREE.Group(), c = p.color, dark = shadeHex(c, -0.35).getStyle();
+    const part = (geo, color, sx, sy, sz, x, y, z, parent = g) => { const m = new THREE.Mesh(geo, mat(color)); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.castShadow = true; parent.add(m); return m; };
+    const s = dog ? 1 : 0.75;
+    const body = new THREE.Group(); g.add(body);
+    part(BOX, c, 0.26 * s, 0.24 * s, 0.56 * s, 0, 0.36 * s, 0, body);
+    const head = new THREE.Group(); head.position.set(0, 0.5 * s, 0.32 * s); body.add(head);
+    part(BOX, c, 0.24 * s, 0.22 * s, 0.22 * s, 0, 0, 0, head);
+    part(BOX, dog ? dark : c, 0.13 * s, 0.1 * s, 0.14 * s, 0, -0.04 * s, 0.15 * s, head);
+    part(BOX, '#111827', 0.05 * s, 0.04 * s, 0.03 * s, 0, 0.0, 0.225 * s, head);
+    for (const x of [-0.06, 0.06]) part(BOX, '#111827', 0.035 * s, 0.035 * s, 0.02 * s, x * s, 0.04 * s, 0.11 * s, head);
+    for (const x of [-0.09, 0.09]) {
+      if (dog) part(BOX, dark, 0.06 * s, 0.16 * s, 0.1 * s, x * s * 1.2, 0.02 * s, -0.02 * s, head);
+      else { const e = part(CONE, c, 0.06, 0.1, 0.06, x * s, 0.14 * s, -0.02 * s, head); e.rotation.z = -x * 2; }
+    }
+    const legs = [];
+    for (const [x, z] of [[-0.09, 0.2], [0.09, 0.2], [-0.09, -0.2], [0.09, -0.2]]) {
+      const pivot = new THREE.Group(); pivot.position.set(x * s, 0.26 * s, z * s); body.add(pivot);
+      part(BOX, c, 0.07 * s, 0.26 * s, 0.07 * s, 0, -0.13 * s, 0, pivot);
+      legs.push(pivot);
+    }
+    const tail = new THREE.Group(); tail.position.set(0, 0.42 * s, -0.28 * s); body.add(tail);
+    const t = part(BOX, dog ? c : dark, 0.05 * s, 0.05 * s, (dog ? 0.22 : 0.36) * s, 0, 0, -0.1 * s, tail);
+    tail.rotation.x = dog ? 0.7 : 1.1;
+    void t;
+    const hit = new THREE.Mesh(BOX, HIDDEN); hit.scale.set(0.6, 0.7, 0.8); hit.position.y = 0.35; hit.userData.pet = p.id; g.add(hit);
+    petRoot.add(g);
+    return { group: g, body, head, legs, tail, hit, heading: 0, px: p.x, py: p.y, t: Math.random() * 10, kind: p.kind, color: c };
+  }
+  function syncPets(g, viewLv, dt) {
+    const list = g.town?.at ? [] : g.pets ?? [];
+    for (const p of list) {
+      let r = pets.get(p.id);
+      if (!r || r.color !== p.color) { if (r) petRoot.remove(r.group); r = buildPet(p); pets.set(p.id, r); }
+      r.group.visible = levelShown(p.lv, viewLv);
+      const moved = Math.hypot(p.x - r.px, p.y - r.py);
+      if (moved > 0.0005 && moved < 2) r.heading = Math.atan2(p.x - r.px, p.y - r.py);
+      else if (p.state === 'play' || p.state === 'wait') {
+        const s = g.sims.find(q => q.id === p.heldBy);
+        if (s) r.heading = Math.atan2(s.x - p.x, s.y - p.y);
+      }
+      r.px = p.x; r.py = p.y;
+      r.t += dt;
+      const walking = moved > 0.0005;
+      const sleep = p.state === 'sleep', play = p.state === 'play', eat = p.state === 'eat';
+      r.group.position.set(p.x, lvY(p.lv) + (play ? Math.abs(Math.sin(r.t * 7)) * 0.12 : 0), p.y);
+      r.group.rotation.y = r.heading;
+      r.legs.forEach((l, i) => { l.rotation.x = walking ? Math.sin(r.t * 14 + (i === 0 || i === 3 ? 0 : Math.PI)) * 0.6 : sleep ? (i < 2 ? -1.4 : 1.4) : 0; });
+      r.body.position.y = sleep ? -0.18 : 0;
+      r.head.rotation.x = eat ? 0.7 : sleep ? 0.35 : Math.sin(r.t * 0.7) * 0.08;
+      r.tail.rotation.y = Math.sin(r.t * (play || walking ? 14 : 3)) * (sleep ? 0.05 : 0.5);
+    }
+    for (const [id, r] of pets) if (!list.some(p => p.id === id)) { petRoot.remove(r.group); pets.delete(id); }
+  }
+
+  // Coriandoli (matrimonio) e pioggia
+  const confetti = new THREE.Group();
+  scene.add(confetti);
+  const CONF = ['#f472b6', '#facc15', '#60a5fa', '#34d399', '#f8fafc', '#a78bfa'];
+  for (let i = 0; i < 70; i++) { const m = new THREE.Mesh(BOX, mat(CONF[i % CONF.length])); m.scale.set(0.06, 0.01, 0.04); m.userData.seed = Math.random() * 100; confetti.add(m); }
+  const RAIN = 500;
+  const rain = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: '#c7d2fe', transparent: true, opacity: 0.55 }), RAIN);
+  rain.frustumCulled = false;
+  const drops = Array.from({ length: RAIN }, () => [Math.random() * 30 - 15, Math.random() * 14, Math.random() * 30 - 15]);
+  scene.add(rain);
+  function syncWeather(g, viewLv, dt, t) {
+    const party = g.party?.confetti && !g.town?.at;
+    confetti.visible = !!party;
+    if (party) {
+      const fam = g.sims.filter(s => !s.npc && !s.kid);
+      const cx = fam.reduce((a, s) => a + s.x, 0) / Math.max(1, fam.length), cz = fam.reduce((a, s) => a + s.y, 0) / Math.max(1, fam.length);
+      for (const m of confetti.children) {
+        const k = m.userData.seed, fall = (t * 0.6 + k) % 1;
+        m.position.set(cx + Math.sin(k * 7) * 2.2 + Math.sin(t * 2 + k) * 0.2, lvY(fam[0]?.lv ?? 0) + 3.2 - fall * 3.2, cz + Math.cos(k * 5) * 2.2);
+        m.rotation.set(t * 3 + k, t * 2 + k, 0);
+      }
+    }
+    const raining = g.weather?.kind === 'pioggia' && viewLv !== -1;
+    rain.visible = raining;
+    if (raining) {
+      for (let i = 0; i < RAIN; i++) {
+        const d = drops[i];
+        d[1] -= dt * 16;
+        if (d[1] < 0) d[1] += 14;
+        m4.compose(v1.set(cam.tx + d[0], d[1], cam.tz + d[2]), q0, v2.set(0.015, 0.35, 0.015));
+        rain.setMatrixAt(i, m4);
+      }
+      rain.instanceMatrix.needsUpdate = true;
+    }
+  }
+
   // Anteprime della costruzione: l'oggetto da piazzare e i muri da tirare
   let ghost = null;
   const ghostMats = new Map();
@@ -852,13 +988,15 @@ export function createWorld(canvas, FLOORS) {
     const dusk = Math.max(0, 1 - Math.abs(hr - 19.5) / 1.5) + Math.max(0, 1 - Math.abs(hr - 6.5) / 1.2);
     sky.copy(skyNight).lerp(skyDay, Math.min(1, day * 1.6));
     if (dusk > 0) sky.lerp(skyDusk, Math.min(0.6, dusk * 0.6));
+    const cloud = g.weather?.kind === 'pioggia' ? 0.65 : g.weather?.kind === 'nuvole' ? 0.35 : 0;   // nuvole e pioggia: cielo grigio, meno sole
+    if (cloud) sky.lerp(new THREE.Color(day > 0.2 ? '#94a3b8' : '#1e293b'), cloud);
     if (viewLv === -1) sky.set('#1c1512');
     scene.background = sky;
     scene.fog = new THREE.Fog(sky, 45, 110);
     const ang = ((hr - 6) / 14) * Math.PI;
     sun.position.set(cam.tx + Math.cos(ang) * 30, Math.max(4, Math.sin(ang) * 35), cam.tz + 14);
     sun.target.position.set(cam.tx, 0, cam.tz);
-    sun.intensity = 0.25 + 2.5 * day;
+    sun.intensity = (0.25 + 2.5 * day) * (1 - cloud * 0.7);
     sun.color.set(dusk > 0.3 ? '#ffd2a1' : '#fff4e0');
     hemi.intensity = 0.8 + 0.7 * day;
     hemi.color.set(day > 0.15 ? '#ffffff' : '#8ea2ff');
@@ -950,6 +1088,9 @@ export function createWorld(canvas, FLOORS) {
     pick(sx, sy, g, viewLv, withSims = true) {
       const r = rayFrom(sx, sy);
       if (withSims) {
+        const hp = r.intersectObjects([...pets.values()].filter(x => x.group.visible).map(x => x.hit), false);
+        const pet = hp[0] && g.pets.find(q => q.id === hp[0].object.userData.pet);
+        if (pet && pet.lv === viewLv) return { pet };
         const hs = r.intersectObjects([...sims.values()].filter(x => x.root.visible).map(x => x.root.children[1]), false);
         const s = hs[0] && g.sims.find(q => q.id === hs[0].object.userData.sim);
         if (s && s.lv === viewLv) return { sim: s };
@@ -979,6 +1120,7 @@ export function createWorld(canvas, FLOORS) {
       return { head: api.project(p.x, p.y + (r.top ?? 1.25) + 0.25, p.z), feet: api.project(p.x, p.y, p.z) };
     },
     objAnchor(o, h = 1.2) { const f = footprint(o); return api.project(f.x + f.w / 2, lvY(o.lv ?? 0) + h, f.y + f.d / 2); },
+    petAnchor(p) { const r = pets.get(p.id); if (!r?.group.visible) return null; return { head: api.project(p.x, lvY(p.lv) + 0.95, p.y), feet: api.project(p.x, lvY(p.lv), p.y) }; },
     /** Disegna tutto: si chiama a ogni fotogramma. */
     render(g, st, dt) {
       api.setLot(g);
@@ -996,6 +1138,8 @@ export function createWorld(canvas, FLOORS) {
       syncObjects(g, viewLv, st.build);
       syncDishes(g, viewLv);
       syncEffects(g, viewLv, performance.now() / 1000);
+      syncPets(g, viewLv, dt);
+      syncWeather(g, viewLv, dt, performance.now() / 1000);
       for (const s of g.sims) { const r = simRec(s); if (r) updateSim(g, s, r, dt, viewLv); }
       for (const [id, r] of sims) if (!g.sims.some(s => s.id === id)) { simRoot.remove(r.root); sims.delete(id); }   // chi è andato via
       const sel = sims.get(st.sel), ss = g.sims[st.sel];

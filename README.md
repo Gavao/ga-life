@@ -1,6 +1,6 @@
 # GA Life
 
-Una piccola "The Sims" per due, in 3D, con la città (parco, palestra, ristorante, locale, biblioteca) e gli amici: create la coppia, prendetevi cura dei bisogni
+Una piccola "The Sims" per due, in 3D, con la città (parco, palestra, ristorante, locale, biblioteca), gli amici, matrimonio, figli, animali e meteo: create la coppia, prendetevi cura dei bisogni
 (fame, energia, igiene, vescica, svago, socialità), trovate un lavoro, fate carriera e arredate casa.
 
 - **Dati solo sul telefono** (IndexedDB): la partita si salva da sola; quando l'app è chiusa il tempo si ferma.

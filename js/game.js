@@ -2,11 +2,13 @@
 // collegati dalle scale, lavoro (a piedi o in auto), rapporto di coppia, ambiente, stati d'animo, piatti
 // sporchi, pulizie, guasti, incendi, ladri, posta e bollette, pizza a domicilio e "libero arbitrio".
 import { TYPES, ACTIONS, SOCIAL, NEEDS, footprint, point } from './catalog.js';
+import { familyTick, proposal, tryBaby, wedding, petDone, PET_ACTIONS } from './family.js';
 
 export const DAYS = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
 export const SPEEDS = [0, 2, 8, 30];   // minuti di gioco al secondo: pausa, normale, veloce, velocissimo
 export const LEVELS = [[-1, 'Tavernetta'], [0, 'Piano terra'], [1, 'Primo piano']];
 const WALK = 1.6;                       // caselle per minuto di gioco
+const KID_NO = new Set(['cucina', 'grigliata', 'lavoretti', 'mobiletto', 'drink', 'aperitivo', 'pesi', 'allenati', 'ripara', 'spegni', 'paga', 'lavoro', 'programma', 'riempi', 'dipingi']);
 
 // Quanto scende ogni bisogno in un'ora di gioco (a casa e al lavoro)
 const DECAY = { fame: 6, energia: 4, igiene: 3.5, vescica: 7.5, svago: 5, socialita: 3.5 };
@@ -23,6 +25,8 @@ export const CAREERS = {
     titles: ['Commesso', 'Addetto vendite', 'Capo reparto', 'Vice direttore', 'Direttore del negozio'] },
   artista: { name: 'Artista', emoji: '🎨', start: 11, end: 17, days: [0, 2, 4, 5], pay: [12, 18, 27, 40, 60], skill: 'creativita',
     titles: ['Artista di strada', 'Illustratore', 'Pittore', 'Artista affermato', 'Maestro d\'arte'] },
+  scuola: { name: 'Scuola', emoji: '🎒', start: 8, end: 14, days: [0, 1, 2, 3, 4], pay: [0, 0, 0, 0, 0], skill: 'logica', school: true,
+    titles: ['Voto 5', 'Voto 6', 'Voto 7', 'Voto 8', 'Voto 10'] },
   meccanico: { name: 'Meccanico', emoji: '🔧', start: 8, end: 16, days: [0, 1, 2, 3, 4], pay: [14, 20, 27, 36, 48], skill: 'manualita',
     titles: ['Apprendista', 'Gommista', 'Meccanico', 'Capo officina', 'Titolare dell\'officina'] },
 };
@@ -97,7 +101,7 @@ export function newGame(simsInfo) {
     v: 4, day: 0, minute: 8 * 60, money: 2000, speed: 1, W, H, objects, sims,
     levels: { '-1': emptyLevel(W, H), 0: { floors: defaultFloors(W, H), walls: defaultHouse() }, 1: emptyLevel(W, H) },
     rel: 60, bills: 7, bill: null, power: true, auto: true, wishDay: -1, goals: { done: [] }, dishes: [], exit: [DOOR_X, H - 1],
-    town: newTown(),
+    town: newTown(), couple: { stage: 'insieme' }, pets: [],
   };
   rollWishes(g);
   return g;
@@ -145,6 +149,8 @@ export function migrate(g) {
     g.v = 4;
   }
   g.town ??= newTown();
+  g.couple ??= { stage: 'insieme' };
+  g.pets ??= [];
   for (const o of g.town.home?.objects ?? []) o.users = [];
   g.dishes ??= [];
   for (const d of g.dishes) d.lv ??= 0;
@@ -168,7 +174,7 @@ export function migrate(g) {
 export const timeText = g => `${String(Math.floor(g.minute / 60)).padStart(2, '0')}:${String(Math.floor(g.minute % 60)).padStart(2, '0')}`;
 export const dayText = g => `${DAYS[g.day % 7]} · giorno ${g.day + 1}`;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const other = (g, sim) => g.sims.find(s => s !== sim && !s.npc);   // l'altro della coppia
+const other = (g, sim) => g.sims.find(s => s !== sim && !s.npc && !s.kid);   // l'altro della coppia (o un genitore)
 /** Oggetti di casa vostra (anche quando siete fuori, in città). */
 export const homeObjects = g => (g.town?.at ? g.town.home.objects : g.objects);
 
@@ -185,12 +191,14 @@ export function makeNpc(p, x, y, extra = {}) {
 }
 /** Amicizia tra due Sim: per la coppia è il rapporto, con gli altri l'amicizia (0-100). */
 export function relOf(g, a, b) {
+  if (a.kid || b.kid) return 100;   // in famiglia ci si vuole bene
   const n = a.npc ? a : b.npc ? b : null;
   if (!n) return g.rel;
   if (a.npc && b.npc) return 50;
   return g.town.friends[n.key]?.rel ?? 0;
 }
 function addRel(g, a, b, v, notify) {
+  if (a.kid || b.kid) return;
   const n = a.npc ? a : b.npc ? b : null;
   if (!n) { g.rel = clamp(g.rel + v, 0, 100); return; }
   if (a.npc && b.npc) return;
@@ -311,6 +319,8 @@ export function stairEnds(o) {
 }
 
 /** Percorso (anche tra piani, passando dalle scale) dal Sim fino a una delle caselle goal [x, y, piano]. */
+/** Percorso usato anche dagli animali (stessa logica dei Sim). */
+export const makePath = (g, who, goals) => findPath(g, who, goals);
 function findPath(g, sim, goals) {
   const blocks = { '-1': blocked(g, -1), 0: blocked(g, 0), 1: blocked(g, 1) };
   const free = (lv, x, y) => floorAt(g, lv, x, y) != null && !blocks[lv].has(`${x},${y}`);
@@ -407,7 +417,9 @@ export function actionsFor(g, sim, o) {
   if (o.broken) return [ACTIONS.ripara];
   if (T.elec && !g.power) return [];
   if (T.mailbox) return g.bill ? [ACTIONS.paga] : [];
-  const list = T.actions.map(id => ACTIONS[id]);
+  if (T.crib) return o.baby && !sim.kid && !sim.npc ? [ACTIONS.biberon, ACTIONS.pannolino, ACTIONS.coccole, ACTIONS.ninna] : [];
+  // I bambini non cucinano, non lavorano e non bevono; i compiti e i giocattoli sono solo loro
+  const list = T.actions.map(id => ACTIONS[id]).filter(a => (sim.kid ? !KID_NO.has(a.id) : !a.kidOnly) && !(sim.npc && a.kidOnly));
   if (T.eat) list.push({ id: 'siediTavolo', label: 'Siediti al tavolo', emoji: '🪑', dur: 20, gain: { energia: 2 }, pose: 'sit' });
   if ((o.dirt ?? 0) >= 2 && T.dirties) list.push(ACTIONS.pulisci);
   return list;
@@ -431,6 +443,7 @@ export function tick(g, min, notify) {
       simStep(g, sim, step, before, notify);
     }
     if (g.sims.some(s => s.gone)) g.sims = g.sims.filter(s => !s.gone);
+    familyTick(g, step, notify);
     g.rel = clamp(g.rel - step / (60 * 24) * 1.5, 0, 100);   // il rapporto cala piano se vi ignorate
   }
 }
@@ -521,7 +534,7 @@ export function rollWishes(g) {
   const have = new Set(g.objects.flatMap(o => TYPES[o.type].actions));
   const always = ['buy', 'sparecchia', 'mangiaPizza', 'pulisci', 'citta', 'amico', 'cena', 'aperitivo'];
   const possible = WISHES.filter(w => have.has(w.id) || SOCIAL.some(a => a.id === w.id) || always.includes(w.id) || Math.random() < 0.15);
-  for (const s of g.sims) if (!s.npc) s.wishes = [...possible].sort(() => Math.random() - 0.5).slice(0, 2).map(w => w.id);
+  for (const s of g.sims) if (!s.npc && !s.kid) s.wishes = [...possible].sort(() => Math.random() - 0.5).slice(0, 2).map(w => w.id);
 }
 
 export const GOALS = [
@@ -538,6 +551,10 @@ export const GOALS = [
   { key: 'citta', text: 'Uscite in città', hint: 'Tocca 🗺️ Città in basso e scegliete un posto: parco, palestra, ristorante…', reward: 150 },
   { key: 'amico', text: 'Fatevi un amico', hint: 'In città tocca qualcuno e chiacchierate finché diventate amici', reward: 200 },
   { key: 'invito', text: 'Invitate un amico a casa', hint: 'Tocca il tuo Sim (il telefono) e scegli "Invita a casa"', reward: 150 },
+  { key: 'proposta', text: 'Fate la proposta di matrimonio', hint: `Con il rapporto sopra l'80% tocca l'altro Sim → "Fai la proposta"`, reward: 200 },
+  { key: 'matrimonio', text: 'Sposatevi', hint: `Da fidanzati, tocca il tuo Sim (telefono) → "Organizza il matrimonio"`, reward: 300 },
+  { key: 'animale', text: 'Adottate un animale', hint: `Tocca il tuo Sim (telefono) → "Adotta un animale"`, reward: 100 },
+  { key: 'bambino', text: 'Avete un bambino', hint: `Tocca l'altro Sim → "Provate ad avere un bambino"`, reward: 300 },
   { key: 'promo', text: 'Ottieni una promozione', hint: 'Andate al lavoro di buon umore: bisogni alti, casa bella', reward: 300 },
 ];
 export const currentGoal = g => GOALS.find(x => !g.goals.done.includes(x.key));
@@ -625,10 +642,10 @@ function simStep(g, sim, dt, before, notify) {
 function goToWork(g, sim, notify) {
   stopCur(sim, g);
   sim.queue = [];
-  const car = g.objects.find(o => TYPES[o.type].car && o.inUse == null && (o.lv ?? 0) === 0);
+  const car = sim.kid ? null : g.objects.find(o => TYPES[o.type].car && o.inUse == null && (o.lv ?? 0) === 0);
   const goals = car ? useTiles(g, car) : [[...exitTile(g), 0]];
   const path = findPath(g, sim, goals);
-  notify(`🚗 ${sim.name} esce per andare al lavoro${car ? ' in auto' : ''} (${CAREERS[sim.job.career].name}).`);
+  notify(sim.kid ? `🎒 ${sim.name} va a scuola con lo scuolabus.` : `🚗 ${sim.name} esce per andare al lavoro${car ? ' in auto' : ''} (${CAREERS[sim.job.career].name}).`);
   if (!path) { sim.atWork = true; return; }
   sim.cur = { id: 'vaiLavoro', label: car ? 'Va al lavoro in auto' : 'Va al lavoro', emoji: '🚗', state: 'walk', simId: sim.id, car: car?.id };
   if (car) car.inUse = -1;   // prenotata
@@ -644,16 +661,23 @@ function backFromWork(g, sim, job, notify) {
   const skill = job.skill ? sim.skills[job.skill] * 2 : 0;
   sim.job.perf += Math.round((m - 45) / 2 + 8 + skill + (sim.car ? 3 : 0));
   sim.job.days++;
-  let text = `🏠 ${sim.name} è tornat${oa(sim)} dal lavoro: +${pay} €`;
+  let text = job.school ? `🎒 ${sim.name} è tornat${oa(sim)} da scuola` : `🏠 ${sim.name} è tornat${oa(sim)} dal lavoro: +${pay} €`;
   if (sim.job.perf >= 100 && sim.job.level < 4) {
     sim.job.level++;
     sim.job.perf = 0;
-    text = `🎉 ${sim.name} è stat${oa(sim)} promoss${oa(sim)}: ${job.titles[sim.job.level]}! (+${pay} €)`;
-    addMood(g, sim, 'promosso', '🎉', 'Promoss' + oa(sim) + '!', 15, 24 * 60);
-    gameEvent(g, sim, 'promo', notify);
+    if (job.school) {
+      text = `📝 Pagella di ${sim.name}: ${job.titles[sim.job.level]}! Bravissim${oa(sim)}!`;
+      for (const s of g.sims) if (!s.npc) addMood(g, s, 'pagella', '📝', 'Bel voto a scuola', 10, 24 * 60);
+      g.money += 50;
+    } else {
+      text = `🎉 ${sim.name} è stat${oa(sim)} promoss${oa(sim)}: ${job.titles[sim.job.level]}! (+${pay} €)`;
+      addMood(g, sim, 'promosso', '🎉', 'Promoss' + oa(sim) + '!', 15, 24 * 60);
+      gameEvent(g, sim, 'promo', notify);
+    }
   } else if (sim.job.perf < -60) {
     sim.job.perf = -60;
-    text += ' · il capo dice che deve arrivare più di buon umore';
+    if (job.school && sim.job.level > 0) { sim.job.level--; sim.job.perf = 0; text += ` · il voto scende: ${job.titles[sim.job.level]}. Più compiti e buon umore!`; }
+    else text += job.school ? ' · la maestra dice che deve fare i compiti' : ' · il capo dice che deve arrivare più di buon umore';
   }
   const car = sim.car && homeObjects(g).find(o => o.id === sim.car);
   sim.lv = 0;
@@ -699,6 +723,19 @@ function startNext(g, sim, notify) {
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) goals.push([Math.floor(p.x) + dx, Math.floor(p.y) + dy, p.lv]);
     const path = findPath(g, sim, goals) ?? [];
     sim.cur = { ...a, social: true, partner: p.id, state: 'walk', t: 0, simId: sim.id, by: cmd.by };
+    sim.path = path;
+    return;
+  }
+  if (cmd.kind === 'pet') {   // coccole, gioco, pappa, bagnetto all'animale
+    const p = g.pets?.find(x => x.id === cmd.pet);
+    const a = PET_ACTIONS[cmd.action];
+    if (!p || !a) return;
+    if (p.heldBy != null && p.heldBy !== sim.id) return say(`${p.name} è già con qualcun altro.`);
+    const path = findPath(g, sim, nearTiles(p.x, p.y, p.lv).slice(1)) ?? findPath(g, sim, nearTiles(p.x, p.y, p.lv));
+    if (!path) return say(`${sim.name} non riesce ad arrivare da ${p.name}.`);
+    p.heldBy = sim.id;
+    p.path = [];
+    sim.cur = { ...a, pet: p.id, state: 'walk', t: 0, simId: sim.id, by: cmd.by };
     sim.path = path;
     return;
   }
@@ -756,6 +793,14 @@ function walkStep(g, sim, dt, notify) {
     return;
   }
   if (c.social) return startSocial(g, sim, notify);
+  if (c.pet) {
+    const p = g.pets.find(x => x.id === c.pet);
+    if (!p) { sim.cur = null; return; }
+    faceTo(sim, p.x, p.y);
+    c.state = 'do';
+    c.t = 0;
+    return;
+  }
   if (c.dish) {
     const d = g.dishes.find(x => x.id === c.dish);
     if (!d) { sim.cur = null; return; }
@@ -818,6 +863,8 @@ function doStep(g, sim, dt, notify) {
   }
   if (c.skill) sim.skills[c.skill] = Math.min(10, (sim.skills[c.skill] ?? 0) + dt / 60 * 0.6 / (1 + (sim.skills[c.skill] ?? 0) * 0.15));
   if (c.social && !c.follower) { const p = g.sims.find(s => s.id === c.partner); if (p) addRel(g, sim, p, (c.rel * dt) / c.dur * (p.npc || sim.npc ? 2.5 : 1), notify); }
+  if (c.baby && o?.baby) for (const [k, v] of Object.entries(c.baby)) o.baby.needs[k] = clamp(o.baby.needs[k] + v * frac, 0, 100);
+  if (c.pet) { const p = g.pets.find(x => x.id === c.pet); if (p) for (const [k, v] of Object.entries(c.petGain ?? {})) p.needs[k] = clamp(p.needs[k] + v * frac, 0, 100); }
   if (c.dance || c.run) sim.walk += dt * 8;
   if (o?.fire && c.id !== 'spegni') { stopCur(sim, g); return; }   // è scoppiato un incendio: si molla tutto
   const done = c.until ? sim.needs[c.until] >= 99.5 : c.t >= c.dur;
@@ -852,6 +899,18 @@ function finishAction(g, sim, c, notify) {
     g.money += price;
     notify(`🪚 ${sim.name} ha venduto il mobiletto che ha costruito: +${price} €`);
   }
+  // Famiglia: compiti, proposta, bebè, matrimonio, ciotola, animali
+  if (c.special === 'compiti' && sim.job?.career === 'scuola') { sim.job.perf += 15; if (c.by !== 'auto') notify(`📝 ${sim.name} ha finito i compiti.`); }
+  const lead = c.social && !c.follower ? g.sims.find(s => s.id === c.partner) : null;
+  if (lead) {
+    const kid = [sim, lead].find(s => s.kid);
+    if (c.special === 'aiutaCompiti' && kid?.job) { kid.job.perf += 20; notify(`📝 ${kid.name} ha fatto i compiti con un aiuto: a scuola andrà meglio!`); }
+    if (c.special === 'proposta') proposal(g, sim, lead, s => mood(s, g), notify);
+    if (c.special === 'bambino') tryBaby(g, sim, lead, notify);
+    if (c.special === 'sposa') wedding(g, sim, lead, notify);
+  }
+  if (c.special === 'riempi' && o) { o.food = 12; if (c.by !== 'auto') notify('🥣 Ciotola piena: gli animali mangiano da soli.'); }
+  if (c.pet) petDone(g, sim, c, notify);
   if (c.special === 'pulisci' && o) { o.dirt = 0; if (c.by !== 'auto') notify(`🧽 ${T.name}: pulito e splendente.`); }
   if (c.special === 'spegni' && o) { o.fire = false; o.fireT = 0; notify(`🧯 ${sim.name} ha spento l'incendio!`); }
   if (c.special === 'paga' && g.bill) {
@@ -875,7 +934,7 @@ function finishAction(g, sim, c, notify) {
   if (o && T.dirties && !c.special) o.dirt = (o.dirt ?? 0) + 1;
   if (o && T.breaks && !c.special && Math.random() < 0.025) { o.broken = true; notify(`💥 ${T.name} si è rotto! Si può provare a ripararlo o chiamare il tecnico.`); }
   if (c.cost && !sim.npc) { g.money -= c.cost; notify(`💳 ${sim.name} ha pagato il conto: ${c.cost} €`); }
-  if (!sim.npc && (c.id === 'dormi' ? g.sims.every(s => s === sim || s.npc || s.cur?.id === 'dormi') : true)) gameEvent(g, sim, c.id, notify);
+  if (!sim.npc && c.id !== 'bambino' && (c.id === 'dormi' ? g.sims.every(s => s === sim || s.npc || s.cur?.id === 'dormi') : true)) gameEvent(g, sim, c.id, notify);
   // Dopo mangiato restano i piatti: sul tavolo (se si è mangiato lì) o per terra vicino
   if (c.dishes && g.dishes.length < 10) {
     const seat = o && c.seat != null ? T.seats?.[c.seat] : null;
@@ -898,6 +957,24 @@ function finishAction(g, sim, c, notify) {
 // ---------------------------------------------------------------- libero arbitrio
 function autonomy(g, sim) {
   sim.idle = 0;
+  // Genitori: prima il bebè (se piange) e la pappa degli animali, poi il resto
+  if (!sim.npc && !sim.kid && Math.min(...Object.values(sim.needs)) > 15) {
+    const BABY_ACT = { fame: 'biberon', igiene: 'pannolino', socialita: 'coccole', energia: 'ninna' };
+    for (const crib of g.objects) {
+      if (!crib.baby || (crib.users ?? []).length || g.sims.some(s => s !== sim && s.queue.some(c => c.obj === crib.id))) continue;
+      const [k, v] = Object.entries(crib.baby.needs).sort((a, b) => a[1] - b[1])[0];
+      if (v < 45) { sim.queue.push({ kind: 'obj', obj: crib.id, action: BABY_ACT[k], by: 'auto' }); return; }
+    }
+    const hungry = g.pets?.find(p => p.needs.fame < 30 && p.heldBy == null && !g.sims.some(s => s.cur?.pet === p.id || s.queue.some(c => c.pet === p.id)));
+    if (hungry) {
+      const bowl = g.objects.find(o => TYPES[o.type].petFood);
+      if (bowl && !(bowl.food > 0)) sim.queue.push({ kind: 'obj', obj: bowl.id, action: 'riempi', by: 'auto' });
+      else if (!bowl) sim.queue.push({ kind: 'pet', pet: hungry.id, action: 'nutri', by: 'auto' });
+      if (sim.queue.length) return;
+    }
+    const needy = g.pets?.find(p => (p.needs.svago < 25 || p.needs.igiene < 20) && p.state !== 'sleep' && p.heldBy == null && p.lv === sim.lv && !g.sims.some(s => s.cur?.pet === p.id || s.queue.some(c => c.pet === p.id)));
+    if (needy && Math.random() < 0.5) { sim.queue.push({ kind: 'pet', pet: needy.id, action: needy.needs.igiene < 20 ? 'lava' : 'giocaPet', by: 'auto' }); return; }
+  }
   const needs = Object.entries(sim.needs).sort((a, b) => a[1] - b[1]);
   for (const [need, val] of needs) {
     if (val > 55) break;

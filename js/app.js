@@ -9,6 +9,7 @@ import { TYPES, CATS, NEEDS, SKILLS, SOCIAL, ACTIONS, footprint } from './catalo
 import { newGame, tick, order, cancel, actionsFor, mood, moodlets, ambiente, canPlace, crossesWall, timeText, dayText, SPEEDS, CAREERS, oa,
   migrate, gameEvent, currentGoal, GOALS, WISHES, wkey, exitTile, floorAt, stairEnds, LEVELS, relOf } from './game.js';
 import { PLACES, isOpen, travel, invite, travelCost, hours } from './town.js';
+import { STAGES, startWedding, WEDDING_COST, adopt, PETS, PET_ACTIONS, WEATHER } from './family.js';
 
 const $ = sel => document.querySelector(sel);
 const canvas = $('#canvas');
@@ -57,6 +58,7 @@ function toast(text) {
   setTimeout(() => el.remove(), 3600);
 }
 function notify(text) {
+  if (text.startsWith('__baby__')) return nameBaby(text.slice(8));
   if (text.startsWith('__jobs__')) return jobsSheet(+text.slice(8));
   toast(text);
   if (/crollat|figuraccia|in tempo/.test(text)) { if (native?.vibrate) native.vibrate('60'); else navigator.vibrate?.(60); }
@@ -95,10 +97,25 @@ function drawLabels() {
   }
   for (const o of g.objects) {
     if (lvOf(o) !== viewLv) continue;
+    if (o.baby) {   // il neonato: nome e, se piange, cosa vuole
+      const p = world.objAnchor(o, 1.0);
+      const [k, v] = Object.entries(o.baby.needs).sort((a, b) => a[1] - b[1])[0];
+      if (p) label('bn' + o.id, `👶 ${esc(o.baby.name)}`, p, 'lbl name npc');
+      const q = world.objAnchor(o, 1.4);
+      if (q && v < 30) label('bb' + o.id, { fame: '🍼', igiene: '🧷', socialita: '😭', energia: '😴' }[k], q, 'lbl bubble alert');
+    }
     const icon = o.fire ? null : o.broken ? '💥' : TYPES[o.type].elec && !g.power ? '🔌' : null;
     if (!icon) continue;
     const p = world.objAnchor(o, 1.7);
     if (p) label('o' + o.id, icon, p, 'lbl bubble alert');
+  }
+  if (!g.town.at) for (const p of g.pets) {
+    if (p.lv !== viewLv) continue;
+    const a = world.petAnchor(p);
+    if (!a?.feet) continue;
+    label('p' + p.id, `${PETS[p.kind].emoji} ${esc(p.name)}`, a.feet, 'lbl name npc');
+    const b = p.state === 'sleep' ? '💤' : p.needs.fame < 25 ? '🦴' : p.needs.svago < 20 ? '🎾' : p.state === 'play' ? '💕' : null;
+    if (b && a.head) label('pb' + p.id, b, a.head, `lbl bubble${p.needs.fame < 25 ? ' alert' : ''}`);
   }
   for (const [k, el] of labelPool) if (!el._seen) { el.remove(); labelPool.delete(k); }
 }
@@ -106,7 +123,7 @@ function drawLabels() {
 // ---------------------------------------------------------------- pannelli (HUD)
 let portraitsHtml = '';
 function hud() {
-  $('#clock').innerHTML = `<b>${timeText(g)}</b><small>${g.town.at ? `${PLACES[g.town.at].emoji} ${PLACES[g.town.at].name}` : esc(dayText(g))}</small>`;
+  $('#clock').innerHTML = `<b>${timeText(g)} ${WEATHER[g.weather?.kind ?? 'sole'][0]}</b><small>${g.town.at ? `${PLACES[g.town.at].emoji} ${PLACES[g.town.at].name}` : esc(dayText(g))}</small>`;
   if (g.town.at && !isOpen(g.town.at, g.minute)) { notify(`🔒 ${PLACES[g.town.at].name} chiude: si torna a casa.`); goTravel('casa'); return; }
   $('#money').textContent = eur(g.money);
   $('#money').classList.toggle('neg', g.money < 0);
@@ -134,9 +151,10 @@ function hud() {
     <div class="queue">${q.length ? q.map((c, i) => `<button class="qi ${i === 0 && s.cur ? 'now' : ''}" data-cancel="${i}" title="Tocca per annullare">${c.emoji ?? '•'}</button>`).join('') + '<small>tocca un\'icona per annullarla</small>' : ''}</div>
     ${s.wishes?.length ? `<div class="wishes">⭐ ${s.wishes.map(id => { const wi = WISHES.find(x => x.id === id); return `<span>${wi.emoji} ${esc(wi.text)}</span>`; }).join('')}</div>` : ''}
     <div class="needs">${NEEDS.map(([k, e, l]) => `<div class="need" title="${l}"><span>${e}</span><div class="bar"><i style="width:${s.needs[k]}%;background:hsl(${Math.round(s.needs[k] * 1.2)},70%,45%)"></i></div></div>`).join('')}</div>
-    <div class="rel"><span>❤️ ${esc(g.sims[0].name)} e ${esc(g.sims[1].name)}</span><div class="bar"><i style="width:${g.rel}%"></i></div></div>`;
+    <div class="rel"><span>❤️ ${esc(g.sims[0].name)} e ${esc(g.sims[1].name)} · ${STAGES[g.couple.stage]}${g.pregnancy ? ' · 🤰 in attesa' : ''}</span><div class="bar"><i style="width:${g.rel}%"></i></div></div>`;
 }
 function queueEmoji(c) {
+  if (c.kind === 'pet') return PET_ACTIONS[c.action]?.emoji;
   if (c.kind === 'social') return SOCIAL.find(a => a.id === c.action)?.emoji;
   if (c.kind === 'go') return '👣';
   if (c.kind === 'dish') return '🍽️';
@@ -223,10 +241,23 @@ function tap(sx, sy) {
       })));
       return;
     }
-    menu(sx, sy, `${esc(t.sim.name)}`, [
-      { label: `👆 Controlla ${t.sim.name}`, run: () => { sel = t.sim.id; hud(); } },
-      ...SOCIAL.map(a => ({ label: `${a.emoji} ${a.label}`, dim: g.rel < a.min, run: () => say(order(g, s, { kind: 'social', action: a.id, partner: t.sim.id })) })),
+    // In famiglia: con il partner anche romanticismo, proposta e bebè; con i figli giochi e compiti
+    const p = t.sim, withKid = s.kid || p.kid;
+    const ROMANCE = ['bacia', 'balliamo', 'proponi', 'bambino'];
+    const acts = SOCIAL.filter(a => !a.hidden && (withKid ? !ROMANCE.includes(a.id) && !a.couple && (a.id !== 'aiutaCompiti' || (p.kid && !s.kid)) : !a.kid)
+      && (a.id !== 'proponi' || g.couple.stage === 'insieme') && (a.id !== 'bambino' || !g.pregnancy));
+    menu(sx, sy, `${esc(p.name)}${p.kid ? ' 🧒' : ''}`, [
+      { label: `👆 Controlla ${p.name}`, run: () => { sel = p.id; hud(); } },
+      ...acts.map(a => ({ label: `${a.emoji} ${a.label}`, dim: !withKid && g.rel < a.min, run: () => say(order(g, s, { kind: 'social', action: a.id, partner: p.id })) })),
     ]);
+    return;
+  }
+  if (t.pet) {
+    const p = t.pet, P = PETS[p.kind];
+    const low = Object.entries(p.needs).sort((a, b) => a[1] - b[1])[0];
+    const state = low[1] < 30 ? { fame: 'ha fame', svago: 'si annoia', igiene: 'è sporco' }[low[0]] : p.state === 'sleep' ? 'dorme' : 'sta bene';
+    if (s.kid) return menu(sx, sy, `${P.emoji} ${esc(p.name)} · ${state}`, ['accarezza', 'giocaPet'].map(id => ({ label: `${PET_ACTIONS[id].emoji} ${PET_ACTIONS[id].label}`, run: () => say(order(g, s, { kind: 'pet', pet: p.id, action: id })) })));
+    menu(sx, sy, `${P.emoji} ${esc(p.name)} · ${state}`, Object.values(PET_ACTIONS).map(a => ({ label: `${a.emoji} ${a.label}`, run: () => say(order(g, s, { kind: 'pet', pet: p.id, action: a.id })) })));
     return;
   }
   if (t.dish) return menu(sx, sy, '🍽️ Piatti sporchi', [{ label: '🍽️ Porta via i piatti', run: () => say(order(g, s, { kind: 'dish', id: t.dish.id })) }]);
@@ -256,6 +287,12 @@ function phoneMenu(sx, sy) {
       toast('🍕 Pizza ordinata: arriva tra 45 minuti davanti a casa.');
     } }]),
     ...(away ? [{ label: '🏠 Torna a casa', run: () => goTravel('casa') }] : []),
+    ...(!away && !g.sims[sel].kid && g.couple.stage === 'fidanzati' ? [{ label: `💒 Organizza il matrimonio (${WEDDING_COST} €)`, run: () => {
+      if (!confirm(`Sposarvi oggi? La festa costa ${WEDDING_COST} € e arrivano i vostri amici.`)) return;
+      const msg = startWedding(g, notify);
+      if (msg) toast(msg); else save();
+    } }] : []),
+    ...(!away && !g.sims[sel].kid ? Object.entries(PETS).map(([k, P]) => ({ label: `${P.emoji} Adotta un ${P.name.toLowerCase()} (${P.price} €)`, run: () => { const msg = adopt(g, k, notify); if (msg) toast(msg); else save(); } })) : []),
     ...broken.map(o => ({ label: `🔧 Chiama il tecnico per: ${TYPES[o.type].name} (150 €)`, run: () => {
       if (g.money < 150) return toast('Non avete abbastanza soldi.');
       g.money -= 150;
@@ -542,12 +579,12 @@ function jobsSheet(simId = sel) {
   const job = s.job && CAREERS[s.job.career];
   const skillName = id => SKILLS.find(k => k[0] === id);
   sheet.innerHTML = `<div class="sheet-head"><h2>💼 Lavoro di ${esc(s.name)}</h2><button class="icon" data-close>✕</button></div>
-    ${job ? `<div class="jobnow"><b>${job.emoji} ${esc(job.titles[s.job.level])}</b><small>${job.name} · ${job.start}:00-${job.end}:00 · ${job.days.map(d => ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'][d]).join(' ')}
+    ${s.kid ? `<div class="jobnow"><b>🎒 Scuola · ${esc(job.titles[s.job.level])}</b><small>Dal lunedì al venerdì, 8:00-14:00 (scuolabus alle 7:30)</small><div class="bar"><i style="width:${Math.max(0, s.job.perf)}%"></i></div><small>Per un voto migliore: compiti (alla scrivania o alla libreria), aiuto dei genitori e buon umore.</small></div>` : job ? `<div class="jobnow"><b>${job.emoji} ${esc(job.titles[s.job.level])}</b><small>${job.name} · ${job.start}:00-${job.end}:00 · ${job.days.map(d => ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'][d]).join(' ')}
       · ${job.pay[s.job.level]} € l'ora</small>
       <div class="bar"><i style="width:${Math.max(0, s.job.perf)}%"></i></div><small>Verso la promozione: vai al lavoro di buon umore${job.skill ? ` e allena ${skillName(job.skill)[1]} ${skillName(job.skill)[2].toLowerCase()} (${s.skills[job.skill].toFixed(1)})` : ''}.</small>
       <button class="secondary" data-quit>Licenziati</button></div>` : '<p class="note">Scegli un lavoro: mezz\'ora prima dell\'inizio il Sim esce di casa da solo e torna con lo stipendio.</p>'}
-    <h3>Offerte</h3>
-    ${Object.entries(CAREERS).map(([id, c]) => `<button class="row" data-job="${id}" data-sim="${s.id}"><span>${c.emoji}</span><span><b>${c.name}</b>
+    ${s.kid ? '' : '<h3>Offerte</h3>'}
+    ${s.kid ? '' : Object.entries(CAREERS).filter(([, c]) => !c.school).map(([id, c]) => `<button class="row" data-job="${id}" data-sim="${s.id}"><span>${c.emoji}</span><span><b>${c.name}</b>
       <small>${c.start}:00-${c.end}:00 · ${c.days.length} giorni a settimana · da ${c.pay[0]} € l'ora${c.skill ? ` · conta ${skillName(c.skill)[1]} ${skillName(c.skill)[2].toLowerCase()}` : ''}</small></span></button>`).join('')}
     <h3>Abilità di ${esc(s.name)}</h3>
     ${SKILLS.map(([k, e, l]) => `<div class="need skillrow"><span>${e} ${l}</span><div class="bar"><i style="width:${(s.skills[k] ?? 0) * 10}%"></i></div><small>${(s.skills[k] ?? 0).toFixed(1)}</small></div>`).join('')}
@@ -555,6 +592,16 @@ function jobsSheet(simId = sel) {
   if (!sheet.open) sheet.showModal();
 }
 
+/** Nome del neonato: lo scegliete voi (se il telefono non apre la finestra, resta quello proposto). */
+function nameBaby(id) {
+  const crib = g.objects.find(o => o.id === id);
+  if (!crib?.baby) return;
+  setTimeout(() => {
+    let name = null;
+    try { name = prompt(`Come lo chiamate? (${crib.baby.gender === 'lei' ? 'è una bambina' : 'è un bambino'})`, crib.baby.name); } catch { /* niente */ }
+    if (name?.trim()) { crib.baby.name = name.trim().slice(0, 14); save(); }
+  }, 300);
+}
 // ---------------------------------------------------------------- città e amici
 const friendText = r => (r >= 70 ? '💛 amico del cuore' : r >= 30 ? '🤝 amico' : r > 5 ? '🙂 conoscente' : '👋 sconosciuto');
 function citySheet(friendsOnly = false) {
@@ -605,6 +652,7 @@ function settingsSheet() {
     <details class="box"><summary>Come si gioca</summary><p>Tocca un Sim in alto a sinistra per comandarlo. Tocca un oggetto per scegliere cosa fargli fare, il pavimento per farlo camminare, l'altro Sim per chiacchierare, abbracciarvi, baciarvi… Le azioni si mettono in fila (fino a 4): tocca un'icona in fila per annullarla.</p>
       <p>Tieni alti i bisogni (fame, energia, igiene, vescica, svago, socialità) e la casa bella e in ordine: l'umore (il rombo sopra la testa) decide come va al lavoro. Dopo mangiato portate via i piatti. Ogni lunedì arrivano le bollette.</p>
       <p>Arreda → Compra: scegli un oggetto e trascinalo; i mobili già in casa si spostano trascinandoli. Arreda → Costruisci: muri (trascina il dito), porte, finestre, pavimenti e colori.</p>
+      <p>👨‍👩‍👧 Famiglia: con il rapporto sopra l'80% fate la proposta (toccate l'altro Sim), poi organizzate il matrimonio dal telefono. "Provate ad avere un bambino": il neonato sta nella culla (tocca la culla per biberon, pannolino, coccole, ninna nanna) e dopo tre giorni diventa un bambino che va a scuola. Dal telefono si adotta un cane o un gatto: ciotola e cuccia sono in Arreda → Famiglia.</p>
       <p>🗺️ Città: uscite al parco, in palestra, al ristorante, al locale o in biblioteca. Toccate la gente per chiacchierare: chi diventa amico (🤝) si può invitare a casa dal telefono (tocca il tuo Sim).</p>
       <p>Un dito sposta la vista, due dita fanno lo zoom e ruotano la casa (anche ⟲ ⟳); 🏠 abbassa o alza i muri. ⏸ ▶ ▶▶ ▶▶▶ cambiano la velocità del tempo; quando l'app è chiusa il tempo si ferma.</p></details>
     <h3>Partita</h3>

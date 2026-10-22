@@ -69,6 +69,14 @@ const A = {
   freccette: { id: 'freccette', label: 'Gioca a freccette', emoji: '🎯', dur: 25, gain: { svago: 26 } },
   drink: { id: 'drink', label: 'Preparati un drink', emoji: '🍹', dur: 20, gain: { svago: 22, socialita: 8, vescica: -15 } },
   mangiaPizza: { id: 'mangiaPizza', label: 'Mangia la pizza', emoji: '🍕', dur: 20, gain: { fame: 60, svago: 8 }, special: 'pizza', dishes: true },
+  // Famiglia: neonato nella culla, figli, animali
+  biberon: { id: 'biberon', label: 'Dai il biberon', emoji: '🍼', dur: 15, gain: { svago: 2 }, baby: { fame: 70 } },
+  pannolino: { id: 'pannolino', label: 'Cambia il pannolino', emoji: '🧷', dur: 8, gain: { igiene: -4 }, baby: { igiene: 80 } },
+  coccole: { id: 'coccole', label: 'Fai le coccole', emoji: '🥰', dur: 20, gain: { socialita: 15, svago: 12 }, baby: { socialita: 70 } },
+  ninna: { id: 'ninna', label: 'Canta la ninna nanna', emoji: '🎶', dur: 15, gain: { svago: 4 }, baby: { energia: 75 } },
+  compiti: { id: 'compiti', label: 'Fai i compiti', emoji: '📝', dur: 45, gain: { svago: -5 }, skill: 'logica', special: 'compiti', kidOnly: true, pose: 'sit' },
+  giocattoli: { id: 'giocattoli', label: 'Gioca con i giocattoli', emoji: '🧸', dur: 40, gain: { svago: 45, socialita: 5 }, kidOnly: true, skill: 'creativita' },
+  riempi: { id: 'riempi', label: 'Riempi la ciotola', emoji: '🥣', dur: 4, gain: {}, special: 'riempi' },
   // In città
   cena: { id: 'cena', label: 'Ordina la cena (30 €)', emoji: '🍝', dur: 50, gain: { fame: 90, svago: 22, socialita: 12, vescica: -10 }, pose: 'sit', cost: 30 },
   aperitivo: { id: 'aperitivo', label: 'Ordina un aperitivo (12 €)', emoji: '🍸', dur: 25, gain: { svago: 25, socialita: 10, fame: 10, vescica: -12 }, cost: 12 },
@@ -83,6 +91,12 @@ export const SOCIAL = [
   { id: 'solletico', label: 'Fai il solletico', emoji: '🤭', dur: 8, gain: { svago: 20, socialita: 10 }, rel: 3, min: 40 },
   { id: 'bacia', label: 'Bacia', emoji: '💋', dur: 6, gain: { socialita: 22, svago: 10 }, rel: 5, min: 55 },
   { id: 'balliamo', label: 'Balliamo insieme', emoji: '💃', dur: 25, gain: { svago: 30, socialita: 20, energia: -6 }, rel: 4, min: 45 },
+  { id: 'proponi', label: 'Fai la proposta di matrimonio', emoji: '💍', dur: 10, gain: { socialita: 20, svago: 10 }, rel: 5, min: 75, special: 'proposta', couple: true },
+  { id: 'bambino', label: 'Provate ad avere un bambino', emoji: '👶', dur: 30, gain: { svago: 25, socialita: 20, energia: -8 }, rel: 4, min: 70, special: 'bambino', couple: true },
+  { id: 'sposa', label: 'Sì, lo voglio!', emoji: '💒', dur: 20, gain: { socialita: 40, svago: 40 }, rel: 10, min: 0, special: 'sposa', couple: true, hidden: true },
+  // Con i figli
+  { id: 'nascondino', label: 'Gioca a nascondino', emoji: '🙈', dur: 25, gain: { svago: 35, socialita: 15, energia: -5 }, rel: 3, min: 0, kid: true },
+  { id: 'aiutaCompiti', label: 'Aiuta a fare i compiti', emoji: '📝', dur: 30, gain: { socialita: 10 }, rel: 3, min: 0, kid: true, special: 'aiutaCompiti' },
 ];
 
 // ---------------------------------------------------------------- pezzi ruotati
@@ -375,7 +389,7 @@ export const TYPES = {
     },
   },
   computer: {
-    name: 'Scrivania con computer', cat: 'Soggiorno', price: 800, w: 1, d: 2, actions: ['gioca', 'social', 'programma', 'lavoro'], seats: [[0.5, 1.4]], seatH: 16,
+    name: 'Scrivania con computer', cat: 'Soggiorno', price: 800, w: 1, d: 2, actions: ['gioca', 'social', 'programma', 'lavoro', 'compiti'], seats: [[0.5, 1.4]], seatH: 16,
     draw(ctx, v, o) {
       pb(ctx, v, o, 0, 0.05, 1, 0.7, 28, '#e5e7eb');
       const r = pb(ctx, v, o, 0.2, 0.12, 0.6, 0.06, 20, '#111827', { z0: 28 });
@@ -387,7 +401,7 @@ export const TYPES = {
     },
   },
   libreria: {
-    name: 'Libreria', cat: 'Soggiorno', price: 180, w: 1, d: 1, actions: ['leggi', 'studiaCucina'], amb: 1,
+    name: 'Libreria', cat: 'Soggiorno', price: 180, w: 1, d: 1, actions: ['leggi', 'studiaCucina', 'compiti'], amb: 1,
     draw(ctx, v, o) {
       const r = pb(ctx, v, o, 0.05, 0.05, 0.9, 0.45, 72, '#92400e');
       const f = frontFace(o);
@@ -710,6 +724,27 @@ export const TYPES = {
       if (f) { facePanel(ctx, v, r, f, 0.15, 0.85, 30, 50, `hsl(${(performance.now() / 15) % 360}, 80%, 60%)`); facePanel(ctx, v, r, f, 0.2, 0.8, 8, 24, '#fde68a'); }
     },
   },
+  // ---------------- Famiglia
+  culla: {
+    name: 'Culla', cat: 'Famiglia', price: 250, w: 1, d: 1, actions: [], crib: true, amb: 1,
+    draw(ctx, v, o) { pb(ctx, v, o, 0.1, 0.1, 0.8, 0.8, 22, '#fde68a'); },
+  },
+  giocattoli: {
+    name: 'Cesta dei giocattoli', cat: 'Famiglia', price: 120, w: 1, d: 1, actions: ['giocattoli'], amb: 1,
+    draw(ctx, v, o) { pb(ctx, v, o, 0.15, 0.2, 0.7, 0.6, 14, '#60a5fa'); },
+  },
+  ciotola: {
+    name: 'Ciotola per animali', cat: 'Famiglia', price: 30, w: 1, d: 1, actions: ['riempi'], petFood: true, passable: true,
+    draw(ctx, v, o) { pb(ctx, v, o, 0.3, 0.3, 0.4, 0.4, 4, '#ef4444'); },
+  },
+  cuccia: {
+    name: 'Cuccia', cat: 'Famiglia', price: 120, w: 1, d: 1, actions: [], petBed: true, amb: 1,
+    draw(ctx, v, o) { pb(ctx, v, o, 0.1, 0.1, 0.8, 0.8, 20, '#b45309'); },
+  },
+  tiragraffi: {
+    name: 'Tiragraffi', cat: 'Famiglia', price: 90, w: 1, d: 1, actions: [], petToy: true,
+    draw(ctx, v, o) { pb(ctx, v, o, 0.3, 0.3, 0.4, 0.4, 40, '#d6d3d1'); },
+  },
   tavoloRistorante: {
     name: 'Tavolo del ristorante', cat: null, price: 0, w: 2, d: 2, actions: ['cena'], seats: [[1, 0.25], [1, 1.75]], seatH: 16, top: 28, shop: false, amb: 2,
     draw(...a) { TYPES.tavolo.draw(...a); },
@@ -724,7 +759,7 @@ export const TYPES = {
     draw(ctx, v, o) { pb(ctx, v, o, 0.2, 0.25, 0.6, 0.5, 5, '#fef3c7', { top: '#fde68a' }); pb(ctx, v, o, 0.3, 0.35, 0.4, 0.3, 0.5, '#dc2626', { z0: 5 }); },
   },
 };
-export const CATS = ['Camera', 'Bagno', 'Cucina', 'Soggiorno', 'Hobby', 'Decorazioni', 'Casa', 'Garage', 'Tavernetta', 'Giardino'];
+export const CATS = ['Camera', 'Bagno', 'Cucina', 'Soggiorno', 'Hobby', 'Famiglia', 'Decorazioni', 'Casa', 'Garage', 'Tavernetta', 'Giardino'];
 
 // Corrente elettrica, sporco e guasti: chi li ha
 for (const id of ['tv', 'tvGrande', 'console', 'computer', 'stereo', 'fornello', 'cucinaPro', 'microonde', 'lavastoviglie', 'acquario', 'frigo', 'frigoLusso']) TYPES[id].elec = true;
