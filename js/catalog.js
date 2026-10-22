@@ -11,7 +11,7 @@ export const NEEDS = [
 // Abilità (da 0 a 10): salgono facendo le attività giuste
 export const SKILLS = [
   ['cucina', '🍳', 'Cucina'], ['fitness', '🏃', 'Fitness'], ['logica', '♟️', 'Logica'],
-  ['creativita', '🎨', 'Creatività'], ['carisma', '🗣️', 'Carisma'],
+  ['creativita', '🎨', 'Creatività'], ['carisma', '🗣️', 'Carisma'], ['manualita', '🔧', 'Manualità'],
 ];
 
 /*
@@ -57,6 +57,18 @@ const A = {
   dondola: { id: 'dondola', label: 'Dondolati', emoji: '🎠', dur: 20, gain: { svago: 18 }, pose: 'sit' },
   fontana: { id: 'fontana', label: 'Ammira la fontana', emoji: '⛲', dur: 15, gain: { svago: 10 } },
   sparecchia: { id: 'sparecchia', label: 'Porta via i piatti', emoji: '🍽️', dur: 4, gain: { igiene: -2 }, hidden: true },
+  // Casa: pulizie, guasti, incendi, posta
+  pulisci: { id: 'pulisci', label: 'Pulisci', emoji: '🧽', dur: 15, gain: { igiene: -4 }, special: 'pulisci' },
+  ripara: { id: 'ripara', label: 'Prova a ripararlo', emoji: '🔧', dur: 60, gain: { svago: -5 }, skill: 'manualita', special: 'ripara' },
+  spegni: { id: 'spegni', label: 'Spegni l\'incendio!', emoji: '🧯', dur: 10, gain: { igiene: -10 }, special: 'spegni' },
+  paga: { id: 'paga', label: 'Paga le bollette', emoji: '🧾', dur: 5, gain: {}, special: 'paga' },
+  // Garage e tavernetta
+  lavoretti: { id: 'lavoretti', label: 'Fai qualche lavoretto', emoji: '🔨', dur: 60, gain: { svago: 18 }, skill: 'manualita' },
+  mobiletto: { id: 'mobiletto', label: 'Costruisci un mobiletto da vendere', emoji: '🪚', dur: 120, gain: { svago: 12, energia: -6 }, skill: 'manualita', special: 'mobiletto' },
+  biliardo: { id: 'biliardo', label: 'Gioca a biliardo', emoji: '🎱', dur: 45, gain: { svago: 40 }, skill: 'logica' },
+  freccette: { id: 'freccette', label: 'Gioca a freccette', emoji: '🎯', dur: 25, gain: { svago: 26 } },
+  drink: { id: 'drink', label: 'Preparati un drink', emoji: '🍹', dur: 20, gain: { svago: 22, socialita: 8, vescica: -15 } },
+  mangiaPizza: { id: 'mangiaPizza', label: 'Mangia la pizza', emoji: '🍕', dur: 20, gain: { fame: 60, svago: 8 }, special: 'pizza', dishes: true },
 };
 export const ACTIONS = A;
 
@@ -612,5 +624,107 @@ export const TYPES = {
       pb(ctx, v, o, 0.35, 0.35, 0.3, 0.3, 12, '#fef9c3', { z0: 60 });
     },
   },
+  cassetta: {
+    name: 'Cassetta della posta', cat: 'Giardino', price: 50, w: 1, d: 1, actions: ['paga'], outdoor: true, mailbox: true,
+    draw(ctx, v, o, g) {
+      pb(ctx, v, o, 0.45, 0.45, 0.1, 0.1, 26, '#57534e');
+      pb(ctx, v, o, 0.25, 0.3, 0.5, 0.4, 14, '#1d4ed8', { z0: 26 });
+      if (g?.bill) pb(ctx, v, o, 0.7, 0.35, 0.06, 0.12, 10, '#ef4444', { z0: 36 });   // bandierina: c'è posta
+    },
+  },
+  // ---------------- Casa: scale, sicurezza
+  scala: {
+    name: 'Scala', cat: 'Casa', price: 650, w: 1, d: 3, actions: [], stairs: true,
+    draw(ctx, v, o) {
+      for (let i = 0; i < 6; i++) pb(ctx, v, o, 0.08, 3 - (i + 1) * 0.5, 0.84, 0.5, (i + 1) * 13, '#b45309', { top: '#d97706' });
+      pb(ctx, v, o, 0, 0, 0.08, 3, 80, 'rgba(120,53,15,.85)');
+    },
+  },
+  antifurto: {
+    name: 'Antifurto', cat: 'Casa', price: 350, w: 1, d: 1, actions: [], alarm: true,
+    draw(ctx, v, o) {
+      pb(ctx, v, o, 0.3, 0.3, 0.4, 0.15, 30, '#e5e7eb', { z0: 30 });
+      pb(ctx, v, o, 0.42, 0.32, 0.16, 0.12, 4, Math.floor(performance.now() / 700) % 2 ? '#ef4444' : '#7f1d1d', { z0: 50 });
+    },
+  },
+  baule: {
+    name: 'Baule antico', cat: 'Casa', price: 160, w: 1, d: 1, actions: [], amb: 1,
+    draw(ctx, v, o) {
+      pb(ctx, v, o, 0.1, 0.2, 0.8, 0.6, 22, '#78350f');
+      pb(ctx, v, o, 0.1, 0.2, 0.8, 0.6, 3, '#fbbf24', { z0: 12 });
+    },
+  },
+  // ---------------- Garage
+  auto: {
+    name: 'Utilitaria', cat: 'Garage', price: 3500, w: 2, d: 3, actions: [], car: true, amb: 1, colors: ['#dc2626', '#2563eb', '#16a34a', '#f8fafc', '#111827'],
+    draw(ctx, v, o) { drawCar(ctx, v, o, o.color ?? '#dc2626', false); },
+  },
+  suv: {
+    name: 'SUV', cat: 'Garage', price: 7500, w: 2, d: 3, actions: [], car: true, q: 1.3, amb: 3, colors: ['#111827', '#f8fafc', '#475569', '#7f1d1d'],
+    draw(ctx, v, o) { drawCar(ctx, v, o, o.color ?? '#111827', true); },
+  },
+  banco: {
+    name: 'Banco da lavoro', cat: 'Garage', price: 450, w: 2, d: 1, actions: ['lavoretti', 'mobiletto'],
+    draw(ctx, v, o) {
+      pb(ctx, v, o, 0.05, 0.1, 1.9, 0.75, 30, '#a16207');
+      pb(ctx, v, o, 0.05, 0.05, 1.9, 0.08, 24, '#57534e', { z0: 30 });
+      pb(ctx, v, o, 0.3, 0.3, 0.3, 0.2, 6, '#ef4444', { z0: 30 });
+      pb(ctx, v, o, 1.2, 0.35, 0.5, 0.15, 3, '#9ca3af', { z0: 30 });
+    },
+  },
+  // ---------------- Tavernetta: divertimento
+  biliardo: {
+    name: 'Tavolo da biliardo', cat: 'Tavernetta', price: 1400, w: 2, d: 3, actions: ['biliardo'], amb: 2,
+    draw(ctx, v, o) {
+      pb(ctx, v, o, 0.1, 0.1, 1.8, 2.8, 26, '#78350f');
+      pb(ctx, v, o, 0.25, 0.25, 1.5, 2.5, 1, '#15803d', { z0: 26 });
+      for (const [lx, ly, c] of [[0.8, 0.9, '#f8fafc'], [1.1, 1.8, '#ef4444'], [0.9, 2.0, '#facc15'], [1.2, 2.1, '#1d4ed8']]) pb(ctx, v, o, lx, ly, 0.1, 0.1, 3, c, { z0: 27 });
+    },
+  },
+  freccette: {
+    name: 'Freccette', cat: 'Tavernetta', price: 180, w: 1, d: 1, actions: ['freccette'],
+    draw(ctx, v, o) {
+      pb(ctx, v, o, 0.3, 0.1, 0.4, 0.06, 4, '#111827', { z0: 40 });
+      const r = pb(ctx, v, o, 0.25, 0.08, 0.5, 0.06, 26, '#f8fafc', { z0: 34 });
+      const f = frontFace(o);
+      if (f) { facePanel(ctx, v, r, f, 0.15, 0.85, 37, 57, '#16a34a'); facePanel(ctx, v, r, f, 0.4, 0.6, 44, 50, '#dc2626'); }
+    },
+  },
+  bar: {
+    name: 'Bancone bar', cat: 'Tavernetta', price: 900, w: 2, d: 1, actions: ['drink'], amb: 2,
+    draw(ctx, v, o) {
+      pb(ctx, v, o, 0, 0, 2, 0.3, 60, '#7c2d12');
+      for (let i = 0; i < 5; i++) pb(ctx, v, o, 0.15 + i * 0.36, 0.05, 0.12, 0.12, 12, ['#16a34a', '#b45309', '#1d4ed8', '#9f1239', '#ca8a04'][i], { z0: 40 });
+      pb(ctx, v, o, 0, 0.45, 2, 0.5, 34, '#92400e');
+      pb(ctx, v, o, -0.02, 0.43, 2.04, 0.54, 3, '#1c1917', { z0: 34 });
+    },
+  },
+  jukebox: {
+    name: 'Jukebox', cat: 'Tavernetta', price: 750, w: 1, d: 1, actions: ['balla'], amb: 2, elec: true, breaks: true,
+    draw(ctx, v, o) {
+      const r = pb(ctx, v, o, 0.12, 0.2, 0.76, 0.6, 56, '#be123c');
+      const f = frontFace(o);
+      if (f) { facePanel(ctx, v, r, f, 0.15, 0.85, 30, 50, `hsl(${(performance.now() / 15) % 360}, 80%, 60%)`); facePanel(ctx, v, r, f, 0.2, 0.8, 8, 24, '#fde68a'); }
+    },
+  },
+  pizza: {
+    name: 'Pizza consegnata', cat: null, price: 0, w: 1, d: 1, actions: ['mangiaPizza'], shop: false,
+    draw(ctx, v, o) { pb(ctx, v, o, 0.2, 0.25, 0.6, 0.5, 5, '#fef3c7', { top: '#fde68a' }); pb(ctx, v, o, 0.3, 0.35, 0.4, 0.3, 0.5, '#dc2626', { z0: 5 }); },
+  },
 };
-export const CATS = ['Camera', 'Bagno', 'Cucina', 'Soggiorno', 'Hobby', 'Decorazioni', 'Giardino'];
+export const CATS = ['Camera', 'Bagno', 'Cucina', 'Soggiorno', 'Hobby', 'Decorazioni', 'Casa', 'Garage', 'Tavernetta', 'Giardino'];
+
+// Corrente elettrica, sporco e guasti: chi li ha
+for (const id of ['tv', 'tvGrande', 'console', 'computer', 'stereo', 'fornello', 'cucinaPro', 'microonde', 'lavastoviglie', 'acquario', 'frigo', 'frigoLusso']) TYPES[id].elec = true;
+for (const id of ['doccia', 'vasca', 'wc', 'lavandino', 'fornello', 'cucinaPro', 'lavello', 'microonde']) TYPES[id].dirties = true;
+for (const id of ['tv', 'tvGrande', 'computer', 'console', 'stereo', 'microonde', 'doccia', 'lavastoviglie']) TYPES[id].breaks = true;
+
+/** Auto vista dall'alto: carrozzeria, tetto, vetri, ruote. */
+function drawCar(ctx, v, o, c, big) {
+  for (const [lx, ly] of [[0.25, 0.4], [1.55, 0.4], [0.25, 2.2], [1.55, 2.2]]) pb(ctx, v, o, lx, ly, 0.2, 0.4, 10, '#111827');
+  pb(ctx, v, o, 0.3, 0.15, 1.4, 2.7, big ? 24 : 20, c, { z0: 6 });
+  pb(ctx, v, o, 0.42, big ? 0.6 : 0.8, 1.16, big ? 1.8 : 1.3, big ? 16 : 14, shade(c, -0.1), { z0: big ? 30 : 26, top: shade(c, 0.1) });
+  pb(ctx, v, o, 0.45, big ? 2.35 : 2.05, 1.1, 0.08, big ? 14 : 12, '#93c5fd', { z0: big ? 30 : 26 });
+  pb(ctx, v, o, 0.4, 0.15, 0.2, 0.06, 6, '#fef08a', { z0: 14 });
+  pb(ctx, v, o, 1.4, 0.15, 0.2, 0.06, 6, '#fef08a', { z0: 14 });
+}

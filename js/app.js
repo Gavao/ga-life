@@ -5,9 +5,9 @@
 import { getSetting, setSetting } from './db.js';
 import { APP_VERSION } from './version.js';
 import { makeView, floorTile, drawSim, bubble, box, shade } from './iso.js';
-import { TYPES, CATS, NEEDS, SKILLS, SOCIAL, ACTIONS, footprint, point } from './catalog.js';
-import { newGame, tick, order, cancel, actionsFor, mood, ambiente, canPlace, crossesWall, timeText, dayText, SPEEDS, CAREERS, oa,
-  migrate, gameEvent, currentGoal, GOALS, WISHES, wkey, exitTile } from './game.js';
+import { TYPES, CATS, NEEDS, SKILLS, SOCIAL, ACTIONS, footprint } from './catalog.js';
+import { newGame, tick, order, cancel, actionsFor, mood, moodlets, ambiente, canPlace, crossesWall, timeText, dayText, SPEEDS, CAREERS, oa,
+  migrate, gameEvent, currentGoal, GOALS, WISHES, wkey, exitTile, floorAt, stairEnds, LEVELS } from './game.js';
 
 const $ = sel => document.querySelector(sel);
 const canvas = $('#canvas');
@@ -23,6 +23,9 @@ let w = 0, h = 0;
 const v = makeView();
 let mini = (() => { try { return localStorage.getItem('mini') === '1'; } catch { return false; } })();   // pannello in basso ridotto
 let build = null;        // modalità Arreda: { tab, cat, placing, tool, floor, paint }
+let viewLv = 0;          // piano che si sta guardando: -1 tavernetta, 0 piano terra, 1 primo piano
+let followLv = null;     // piano del Sim selezionato all'ultimo controllo (la vista lo segue sulle scale)
+const lvOf = o => o.lv ?? 0;
 
 const ICONS = {
   letto: '🛏️', lettoLusso: '🛏️', lettoSingolo: '🛏️', comodino: '🕯️', armadio: '🚪', specchio: '🪞', wc: '🚽', doccia: '🚿', vasca: '🛁', lavandino: '🪥',
@@ -30,7 +33,8 @@ const ICONS = {
   divano: '🛋️', divanoLusso: '🛋️', poltrona: '💺', tv: '📺', tvGrande: '🖥️', console: '🕹️', computer: '💻', libreria: '📚', stereo: '🔊', acquario: '🐠',
   scacchi: '♟️', chitarra: '🎸', cavalletto: '🎨', tapis: '🏃', pesi: '🏋️', pianta: '🪴', piantaGrande: '🌿', lampada: '💡', tappeto: '🟥', tappetoGrande: '🟫',
   quadro: '🖼️', dipinto: '🖼️', statua: '🗿', albero: '🌳', pino: '🌲', siepe: '🌱', aiuola: '🌷', panchina: '🪑', barbecue: '🍖', amaca: '🌴', altalena: '🎠',
-  fontana: '⛲', piscina: '🏊', lampione: '🏮',
+  fontana: '⛲', piscina: '🏊', lampione: '🏮', cassetta: '📬', scala: '🪜', antifurto: '🚨', baule: '🧳', auto: '🚗', suv: '🚙', banco: '🧰',
+  biliardo: '🎱', freccette: '🎯', bar: '🍹', jukebox: '🎵', pizza: '🍕',
 };
 // Pavimenti: [nome, colore, colore alternato, prezzo a casella]
 const FLOORS = {
@@ -40,7 +44,8 @@ const FLOORS = {
 };
 const WALL_COLORS = ['#ede9fe', '#fef3c7', '#dcfce7', '#dbeafe', '#fee2e2', '#f5f5f4', '#d6d3d1', '#fde68a', '#c7d2fe', '#fbcfe8'];
 const WALL_H = 40;          // muri "tagliati" bassi, come in The Sims, per vedere dentro
-const PRICES = { muro: 15, porta: 120, finestra: 80, pittura: 5 };
+const PRICES = { muro: 15, porta: 120, finestra: 80, pittura: 5, saracinesca: 400 };
+const FLOOR_EXTRA = { '-1': 25, 0: 0, 1: 10 };   // costo in più a casella: scavare la tavernetta, la struttura del primo piano
 
 function toast(text) {
   const box = $('#toasts');
@@ -105,59 +110,108 @@ function draw() {
   grad.addColorStop(1, night > 0.5 ? '#312e81' : '#bae6fd');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
-  // Terreno intorno al lotto e strada davanti
   const m = 6;
-  quad([v.at(-m, -m), v.at(g.W + m, -m), v.at(g.W + m, g.H), v.at(-m, g.H)], '#3fbf6f');
-  quad([v.at(-m, g.H), v.at(g.W + m, g.H), v.at(g.W + m, g.H + 0.6), v.at(-m, g.H + 0.6)], '#d6d3d1');   // marciapiede
-  quad([v.at(-m, g.H + 0.6), v.at(g.W + m, g.H + 0.6), v.at(g.W + m, g.H + 3), v.at(-m, g.H + 3)], '#475569');
-  for (let x = -m; x < g.W + m; x += 2) quad([v.at(x, g.H + 1.75), v.at(x + 1, g.H + 1.75), v.at(x + 1, g.H + 1.85), v.at(x, g.H + 1.85)], '#f8fafc');
-  quad([v.at(-m, g.H + 3), v.at(g.W + m, g.H + 3), v.at(g.W + m, g.H + m), v.at(-m, g.H + m)], '#3fbf6f');
-
-  for (let y = 0; y < g.H; y++) for (let x = 0; x < g.W; x++) {
-    const f = FLOORS[g.floors[y * g.W + x]] ?? FLOORS.erba;
-    floorTile(ctx, v, x, y, f[1 + ((x + y) % 2)], f[0] === 'Prato' ? 'rgba(0,0,0,.03)' : 'rgba(0,0,0,.08)');
+  if (viewLv === -1) {   // tavernetta: sotto terra, si vede solo quello che è stato scavato
+    quad([v.at(-m, -m), v.at(g.W + m, -m), v.at(g.W + m, g.H + m), v.at(-m, g.H + m)], '#3b2f2a');
+    for (let y = 0; y < g.H; y++) for (let x = 0; x < g.W; x++) if (floorAt(g, -1, x, y) == null) floorTile(ctx, v, x, y, (x + y) % 2 ? '#4a3b33' : '#46382f', 'rgba(0,0,0,.15)');
+  } else {   // terreno intorno al lotto e strada davanti
+    quad([v.at(-m, -m), v.at(g.W + m, -m), v.at(g.W + m, g.H), v.at(-m, g.H)], '#3fbf6f');
+    quad([v.at(-m, g.H), v.at(g.W + m, g.H), v.at(g.W + m, g.H + 0.6), v.at(-m, g.H + 0.6)], '#d6d3d1');
+    quad([v.at(-m, g.H + 0.6), v.at(g.W + m, g.H + 0.6), v.at(g.W + m, g.H + 3), v.at(-m, g.H + 3)], '#475569');
+    for (let x = -m; x < g.W + m; x += 2) quad([v.at(x, g.H + 1.75), v.at(x + 1, g.H + 1.75), v.at(x + 1, g.H + 1.85), v.at(x, g.H + 1.85)], '#f8fafc');
+    quad([v.at(-m, g.H + 3), v.at(g.W + m, g.H + 3), v.at(g.W + m, g.H + m), v.at(-m, g.H + m)], '#3fbf6f');
   }
-  const [ex, ey] = exitTile(g);
-  floorTile(ctx, v, ex, ey, '#9ca3af');   // dove arriva l'auto
-
-  // Oggetti piatti (tappeti, piscina) sotto a tutto
-  const items = [];
-  for (const o of g.objects) {
-    if (build?.placing?.moveId === o.id) continue;
-    if (TYPES[o.type].flat) { TYPES[o.type].draw(ctx, v, o); continue; }
-    const d = objDepth(o);
-    items.push({ depth: d, o });
-    if (TYPES[o.type].front) items.push({ depth: d + 0.008, front: o });
+  if (viewLv === 1) {   // primo piano: il piano terra si vede in trasparenza sotto
+    ctx.globalAlpha = 0.35;
+    drawLevel(0, false);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(15,23,42,.25)';
+    ctx.fillRect(0, 0, w, h);
   }
-  for (const s of g.sims) if (!s.atWork) items.push({ depth: simDepth(s), s });
-  for (const k in g.walls) {
-    const [t, a, b] = k.split(':'), p = +a, q = +b;
-    items.push(t === 'v' ? { depth: p + q + 1.02, wall: k, r: [p - 0.06, q, 0.12, 1] } : { depth: p + 1 + q + 1.02 - 1, wall: k, r: [p, q - 0.06, 1, 0.12] });
-  }
-  for (const d of g.dishes ?? []) items.push({ depth: d.h ? d.x + d.y + 3 : d.x + d.y, dish: d });   // sul tavolo: sopra il piano
-  if (build?.placing) items.push({ depth: objDepth(build.placing) + 0.02, ghost: build.placing });
-  if (build?.wallPreview) for (const r of build.wallPreview) items.push({ depth: 999, preview: r });
-  items.sort((a, b) => a.depth - b.depth);
-  for (const it of items) {
-    if (it.o) TYPES[it.o.type].draw(ctx, v, it.o);
-    else if (it.front) TYPES[it.front.type].front(ctx, v, it.front);
-    else if (it.ghost) drawGhost(it.ghost);
-    else if (it.wall) drawWall(it.wall, it.r);
-    else if (it.dish) drawDish(it.dish);
-    else if (it.preview) box(ctx, v, ...it.preview.r, WALL_H, it.preview.ok ? 'rgba(74,222,128,.7)' : 'rgba(239,68,68,.6)');
-    else drawOneSim(it.s);
-  }
-  for (const s of g.sims) if (!s.atWork) { drawName(s); drawBubble(s); }
-  if (night > 0) {
+  drawLevel(viewLv, true);
+  for (const s of g.sims) if (!s.atWork && s.lv === viewLv) { drawName(s); drawBubble(s); }
+  for (const o of g.objects) if (lvOf(o) === viewLv) drawState(o);
+  if (night > 0 && viewLv !== -1) {
     ctx.fillStyle = `rgba(30,27,75,${0.32 * Math.min(1, night)})`;
     ctx.fillRect(0, 0, w, h);
   }
 }
 
-function drawWall(k, r) {
-  const wl = g.walls[k];
+/** Disegna un piano: pavimenti, muri, oggetti e (se live) Sim, piatti e anteprime della costruzione. */
+function drawLevel(lv, live) {
+  const L = g.levels[lv];
+  for (let y = 0; y < g.H; y++) for (let x = 0; x < g.W; x++) {
+    const id = L.floors[y * g.W + x];
+    if (id == null) continue;
+    const f = FLOORS[id] ?? FLOORS.erba;
+    floorTile(ctx, v, x, y, f[1 + ((x + y) % 2)], f[0] === 'Prato' ? 'rgba(0,0,0,.03)' : 'rgba(0,0,0,.08)');
+  }
+  if (lv === 0) { const [ex, ey] = exitTile(g); floorTile(ctx, v, ex, ey, '#9ca3af'); }
+  const items = [];
+  for (const o of g.objects) {
+    if (lvOf(o) !== lv || (live && build?.placing?.moveId === o.id) || (o.inUse != null && o.inUse >= 0)) continue;
+    if (TYPES[o.type].flat) { TYPES[o.type].draw(ctx, v, o, g); continue; }
+    const d = objDepth(o);
+    items.push({ depth: d, o });
+    if (TYPES[o.type].front) items.push({ depth: d + 0.008, front: o });
+  }
+  if (live) for (const s of g.sims) if (!s.atWork && s.lv === lv) items.push({ depth: simDepth(s), s });
+  for (const k in L.walls) {
+    const [t, a, b] = k.split(':'), p = +a, q = +b;
+    items.push(t === 'v' ? { depth: p + q + 1.02, wall: k, r: [p - 0.06, q, 0.12, 1] } : { depth: p + q + 1.02, wall: k, r: [p, q - 0.06, 1, 0.12] });
+  }
+  if (live) {
+    for (const d of g.dishes ?? []) if ((d.lv ?? 0) === lv) items.push({ depth: d.h ? d.x + d.y + 3 : d.x + d.y, dish: d });   // sul tavolo: sopra il piano
+    if (build?.placing) items.push({ depth: objDepth(build.placing) + 0.02, ghost: build.placing });
+    if (build?.wallPreview) for (const r of build.wallPreview) items.push({ depth: 999, preview: r });
+  }
+  items.sort((a, b) => a.depth - b.depth);
+  for (const it of items) {
+    if (it.o) TYPES[it.o.type].draw(ctx, v, it.o, g);
+    else if (it.front) TYPES[it.front.type].front(ctx, v, it.front);
+    else if (it.ghost) drawGhost(it.ghost);
+    else if (it.wall) drawWall(L.walls[it.wall], it.wall, it.r);
+    else if (it.dish) drawDish(it.dish);
+    else if (it.preview) box(ctx, v, ...it.preview.r, WALL_H, it.preview.ok ? 'rgba(74,222,128,.7)' : 'rgba(239,68,68,.6)');
+    else drawOneSim(it.s);
+  }
+}
+
+/** Sporco, guasti, fiamme e corrente staccata sopra gli oggetti. */
+function drawState(o) {
+  const T = TYPES[o.type];
+  const f = footprint(o);
+  const [sx, sy] = v.at(f.x + f.w / 2, f.y + f.d / 2, 30);
+  const t = performance.now() / 1000;
+  if (o.fire) {
+    for (let i = 0; i < 7; i++) {
+      const k = (t * 1.7 + i / 7) % 1;
+      ctx.fillStyle = `rgba(${240 + Math.round(15 * Math.sin(i))},${Math.round(160 - k * 120)},20,${0.9 - k * 0.8})`;
+      ctx.beginPath(); ctx.arc(sx + Math.sin(i * 2.3 + t * 3) * 10 * v.z, sy - k * 40 * v.z, (10 - k * 6) * v.z, 0, Math.PI * 2); ctx.fill();
+    }
+    return;
+  }
+  if ((o.dirt ?? 0) >= 4) {   // macchie e moscerini
+    ctx.fillStyle = 'rgba(120,53,15,.55)';
+    for (const [dx, dy] of [[-8, 6], [6, 10], [2, -2]]) { ctx.beginPath(); ctx.ellipse(sx + dx * v.z, sy + dy * v.z + 18 * v.z, 5 * v.z, 2.5 * v.z, 0, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = '#1f2937';
+    for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(sx + Math.sin(t * 4 + i * 2) * 12 * v.z, sy - 6 * v.z + Math.cos(t * 5 + i) * 6 * v.z, 1.3 * v.z, 0, Math.PI * 2); ctx.fill(); }
+  }
+  if (o.broken) {
+    ctx.fillStyle = 'rgba(100,116,139,.6)';
+    for (let i = 0; i < 3; i++) { const k = (t * 0.6 + i / 3) % 1; ctx.beginPath(); ctx.arc(sx + Math.sin(i * 3) * 6 * v.z, sy - 10 * v.z - k * 30 * v.z, (5 + k * 6) * v.z, 0, Math.PI * 2); ctx.fill(); }
+    bubble(ctx, v, sx - 16 * v.z, sy + 50 * v.z, '💥', true);
+  } else if (T.elec && !g.power) bubble(ctx, v, sx - 16 * v.z, sy + 50 * v.z, '🔌', true);
+}
+
+function drawWall(wl, k, r) {
   const c = wl.color ?? '#ede9fe';
   const top = { top: shade(c, -0.45) };
+  if (wl.garage) {   // saracinesca del garage: si passa, con le doghe
+    box(ctx, v, ...r, 6, c, { z0: WALL_H - 6, ...top });
+    box(ctx, v, ...r, WALL_H - 6, 'rgba(148,163,184,.55)', { top: 'rgba(148,163,184,.3)', line: 'rgba(71,85,105,.6)' });
+    return;
+  }
   if (wl.door) {   // stipiti e architrave: si passa in mezzo
     const vert = k[0] === 'v';
     const [x, y, ww, dd] = r;
@@ -241,8 +295,11 @@ function hud() {
   $('#money').classList.toggle('neg', g.money < 0);
   for (const b of document.querySelectorAll('[data-speed]')) b.classList.toggle('on', +b.dataset.speed === g.speed && !build);
   $('#portraits').innerHTML = g.sims.map(s => `<button class="portrait ${s.id === sel ? 'on' : ''}" data-sel="${s.id}" style="--mood:hsl(${Math.round(mood(s, g) * 1.2)},75%,48%)">
-      <span class="face" style="background:${s.look.skin};border-color:${s.look.hair}">${esc(s.name[0] ?? '?')}</span><small>${esc(s.name)}</small>${s.atWork ? '<i>💼</i>' : ''}</button>`).join('');
+      <span class="face" style="background:${s.look.skin};border-color:${s.look.hair}">${esc(s.name[0] ?? '?')}</span><small>${esc(s.name)}</small>${s.atWork ? '<i>💼</i>' : s.lv !== viewLv ? `<b>${s.lv > viewLv ? '⬆️' : '⬇️'}</b>` : ''}</button>`).join('');
   $('#bottom').classList.toggle('mini', mini && !build);
+  // La vista segue il Sim selezionato quando cambia piano (scale)
+  const fs = g.sims[sel];
+  if (!build && !fs.atWork && followLv !== fs.lv) { followLv = fs.lv; if (viewLv !== fs.lv) setLevel(fs.lv); }
   if (build) { $('#goal').hidden = true; return; }
   const s = g.sims[sel];
   const job = s.job && CAREERS[s.job.career];
@@ -251,10 +308,11 @@ function hud() {
   const goal = currentGoal(g);
   $('#goal').hidden = !goal;
   if (goal) $('#goal').innerHTML = `<span>🎯</span><span><b>${esc(goal.text)}</b><small>${esc(goal.hint)}</small></span><em>+${goal.reward} €</em>`;
-  const amb = s.atWork ? null : ambiente(g, s.x, s.y);
+  const amb = s.atWork ? null : ambiente(g, s.x, s.y, s.lv);
   $('#panel').innerHTML = `<div class="who" data-mini><b>${esc(s.name)}</b><span>${moodText(mood(s, g))}</span><i class="fold">${mini ? '▲' : '▼'}</i>
       <small>${job ? `${job.emoji} ${esc(job.titles[s.job.level])} · ${job.start}-${job.end}` : 'Disoccupat' + oa(s) + ': trova lavoro con 💼'}${amb != null ? ` · 🏠 ${ambText(amb)}` : ''}</small></div>
     <div class="doing">${esc(doing)}</div>
+    ${(() => { const ms = moodlets(g, s); return ms.length ? `<div class="moods">${ms.map(m => `<span class="${m.val > 0 ? 'up' : m.val < 0 ? 'down' : ''}">${m.emoji} ${esc(m.text)}${m.val ? ` ${m.val > 0 ? '+' : ''}${m.val}` : ''}</span>`).join('')}</div>` : ''; })()}
     <div class="queue">${q.length ? q.map((c, i) => `<button class="qi ${i === 0 && s.cur ? 'now' : ''}" data-cancel="${i}" title="Tocca per annullare">${c.emoji ?? '•'}</button>`).join('') + '<small>tocca un\'icona per annullarla</small>' : ''}</div>
     ${s.wishes?.length ? `<div class="wishes">⭐ ${s.wishes.map(id => { const wi = WISHES.find(x => x.id === id); return `<span>${wi.emoji} ${esc(wi.text)}</span>`; }).join('')}</div>` : ''}
     <div class="needs">${NEEDS.map(([k, e, l]) => `<div class="need" title="${l}"><span>${e}</span><div class="bar"><i style="width:${s.needs[k]}%;background:hsl(${Math.round(s.needs[k] * 1.2)},70%,45%)"></i></div></div>`).join('')}</div>
@@ -329,17 +387,19 @@ function zoomAt(sx, sy, z) {
 function hit(sx, sy, withSims = true) {
   if (withSims) {
     for (const s of [...g.sims].sort((a, b) => simDepth(b) - simDepth(a))) {
-      if (s.atWork) continue;
+      if (s.atWork || s.lv !== viewLv) continue;
       const [px, py] = v.at(s.x, s.y, seatHeight(s));
       if (Math.abs(sx - px) < 16 * v.z && sy < py + 6 * v.z && sy > py - 62 * v.z) return { sim: s };
     }
     for (const d of g.dishes ?? []) {
+      if ((d.lv ?? 0) !== viewLv) continue;
       const [px, py] = v.at(d.x, d.y, d.h);
       if (Math.hypot(sx - px, sy - py) < 14 * v.z) return { dish: d };
     }
   }
   let best = null;
   for (const o of g.objects) {
+    if (lvOf(o) !== viewLv || (o.inUse != null && o.inUse >= 0)) continue;
     const f = footprint(o);
     const tall = TYPES[o.type].flat ? 0 : 50;
     const pts = [[f.x, f.y], [f.x + f.w, f.y], [f.x + f.w, f.y + f.d], [f.x, f.y + f.d]].flatMap(([x, y]) => [v.at(x, y), v.at(x, y, tall)]);
@@ -354,7 +414,7 @@ function hit(sx, sy, withSims = true) {
   }
   if (best) return best;
   const [tx, ty] = v.tile(sx, sy);
-  if (tx >= 0 && ty >= 0 && tx < g.W && ty < g.H) return { tile: [Math.floor(tx), Math.floor(ty)] };
+  if (floorAt(g, viewLv, Math.floor(tx), Math.floor(ty)) != null) return { tile: [Math.floor(tx), Math.floor(ty)] };
   return {};
 }
 
@@ -363,7 +423,7 @@ function tap(sx, sy) {
   const t = hit(sx, sy);
   const s = g.sims[sel];
   if (t.sim) {
-    if (t.sim.id === sel) return;
+    if (t.sim.id === sel) return phoneMenu(sx, sy);
     menu(sx, sy, `${esc(t.sim.name)}`, [
       { label: `👆 Controlla ${t.sim.name}`, run: () => { sel = t.sim.id; hud(); } },
       ...SOCIAL.map(a => ({ label: `${a.emoji} ${a.label}`, dim: g.rel < a.min, run: () => say(order(g, s, { kind: 'social', action: a.id })) })),
@@ -378,9 +438,45 @@ function tap(sx, sy) {
     menu(sx, sy, `${ICONS[t.obj.type] ?? ''} ${esc(T.name)}`, acts.filter(a => !a.hidden).map(a => ({ label: `${a.emoji} ${a.label}`, run: () => say(order(g, s, { kind: 'obj', obj: t.obj.id, action: a.id })) })));
     return;
   }
-  if (t.tile) say(order(g, s, { kind: 'go', x: t.tile[0], y: t.tile[1] }));
+  if (t.tile) say(order(g, s, { kind: 'go', x: t.tile[0], y: t.tile[1], lv: viewLv }));
 }
 const say = msg => { if (msg) toast(msg); hud(); };
+
+/** Toccando il proprio Sim: il telefono. */
+function phoneMenu(sx, sy) {
+  const broken = g.objects.filter(o => o.broken);
+  menu(sx, sy, '📱 Telefono', [
+    { label: g.pizzaAt ? '🍕 La pizza sta arrivando…' : '🍕 Ordina una pizza (25 €)', dim: !!g.pizzaAt, run: () => {
+      if (g.pizzaAt) return;
+      if (g.money < 25) return toast('Non avete abbastanza soldi.');
+      g.money -= 25;
+      g.pizzaAt = g.day * 1440 + g.minute + 45;
+      toast('🍕 Pizza ordinata: arriva tra 45 minuti davanti a casa.');
+    } },
+    ...broken.map(o => ({ label: `🔧 Chiama il tecnico per: ${TYPES[o.type].name} (150 €)`, run: () => {
+      if (g.money < 150) return toast('Non avete abbastanza soldi.');
+      g.money -= 150;
+      o.broken = false;
+      toast(`🔧 Il tecnico ha riparato: ${TYPES[o.type].name}.`);
+      save();
+    } })),
+    ...(g.bill ? [{ label: `🧾 Paga le bollette online (${g.bill.amount} € + 10 €)`, run: () => {
+      g.money -= g.bill.amount + 10;
+      toast(`🧾 Bollette pagate.${g.power ? '' : ' La corrente è tornata.'}`);
+      g.bill = null;
+      g.power = true;
+      gameEvent(g, null, 'paga', notify);
+      save();
+    } }] : []),
+  ]);
+}
+
+/** Cambia il piano che si guarda (▲▼). */
+function setLevel(lv) {
+  viewLv = Math.max(-1, Math.min(1, lv));
+  $('#lvName').textContent = LEVELS.find(l => l[0] === viewLv)[1];
+  if (build) buildPanel();
+}
 
 function menu(sx, sy, title, items) {
   const m = $('#menu');
@@ -408,10 +504,11 @@ function closeBuild() {
 }
 const TOOLS = [
   ['muro', '🧱', 'Muro', 'Trascina il dito lungo la griglia per tirare un muro (15 € a pezzo).'],
-  ['abbatti', '⛏️', 'Abbatti', 'Tocca un muro per abbatterlo.'],
+  ['abbatti', '⛏️', 'Abbatti', 'Tocca un muro per abbatterlo (in tavernetta e al primo piano anche un pavimento vuoto).'],
   ['porta', '🚪', 'Porta', 'Tocca un muro per metterci una porta (120 €); toccala di nuovo per toglierla.'],
+  ['saracinesca', '🚘', 'Garage', 'Tocca i pezzi di muro dove vuoi la saracinesca del garage (400 € l\'uno; l\'auto ne vuole 2 affiancati).'],
   ['finestra', '🪟', 'Finestra', 'Tocca un muro per metterci una finestra (80 €).'],
-  ['pavimento', '🟫', 'Pavimento', 'Scegli il pavimento e passa il dito sulle caselle.'],
+  ['pavimento', '🟫', 'Pavimento', 'Scegli il pavimento e passa il dito sulle caselle. In tavernetta prima si scava (+25 € a casella), al primo piano si costruisce il solaio (+10 €).'],
   ['pittura', '🎨', 'Pittura', 'Scegli il colore e tocca i muri da dipingere (5 €).'],
 ];
 function buildPanel() {
@@ -445,7 +542,7 @@ function wallAt(sx, sy) {
   const [x, y] = v.tile(sx, sy);
   const dv = Math.abs(x - Math.round(x)), dh = Math.abs(y - Math.round(y));
   const kv = wkey('v', Math.round(x), Math.floor(y)), kh = wkey('h', Math.floor(x), Math.round(y));
-  const cand = [[dv, kv], [dh, kh]].filter(([d, k]) => d < 0.35 && g.walls[k]).sort((a, b) => a[0] - b[0]);
+  const cand = [[dv, kv], [dh, kh]].filter(([d, k]) => d < 0.35 && walls()[k]).sort((a, b) => a[0] - b[0]);
   return cand[0]?.[1] ?? null;
 }
 /** Pezzi di muro tra due angoli (solo in linea retta, sulla direzione prevalente). */
@@ -462,8 +559,8 @@ function wallRun(a, b) {
   for (const u of out) {
     const [t, p, q] = u.k.split(':').map((x, i) => (i ? +x : x));
     const inLot = t === 'v' ? p >= 0 && p <= g.W && q >= 0 && q < g.H : q >= 0 && q <= g.H && p >= 0 && p < g.W;
-    const blockedByObj = g.objects.some(o => !TYPES[o.type].passable && crossesWall({ walls: { [u.k]: {} } }, footprint(o)));
-    u.ok = inLot && !blockedByObj && !g.walls[u.k];
+    const blockedByObj = g.objects.some(o => !TYPES[o.type].passable && crossesWall({ [u.k]: {} }, footprint(o)) && lvOf(o) === viewLv);
+    u.ok = inLot && !blockedByObj && !walls()[u.k];
   }
   return out;
 }
@@ -493,7 +590,7 @@ function buildMove(d, sx, sy) {
   } else if (d.kind === 'object') {   // inizia a spostare un mobile trascinandolo
     const o = d.obj;
     if (g.sims.some(s => s.cur?.obj === o.id)) { toast('Lo stanno usando: aspetta che finiscano.'); d.kind = 'none'; return; }
-    build.placing = { type: o.type, x: o.x, y: o.y, rot: o.rot, color: o.color, moveId: o.id };
+    build.placing = { type: o.type, x: o.x, y: o.y, rot: o.rot, color: o.color, moveId: o.id, lv: lvOf(o) };
     const f = footprint(build.placing);
     const [tx, ty] = v.tile(d.x, d.y);
     d.grab = [tx - f.x, ty - f.y];
@@ -519,7 +616,7 @@ function buildUp(d, sx, sy) {
     for (const u of run) {
       if (!u.ok) continue;
       if (g.money < PRICES.muro) { toast('Soldi finiti: alcuni pezzi di muro non sono stati costruiti.'); break; }
-      g.walls[u.k] = { color: build.paint };
+      walls()[u.k] = { color: build.paint };
       g.money -= PRICES.muro;
       n++;
     }
@@ -534,27 +631,43 @@ function paintFloor(d, sx, sy) {
   const [x, y] = v.tile(sx, sy).map(Math.floor);
   if (x < 0 || y < 0 || x >= g.W || y >= g.H || d.painted.has(`${x},${y}`)) return;
   d.painted.add(`${x},${y}`);
+  const floors = g.levels[viewLv].floors;
   const i = y * g.W + x;
-  if (g.floors[i] === build.floor) return;
-  const price = FLOORS[build.floor][3];
+  if (floors[i] === build.floor) return;
+  // Sul primo piano si paga anche la struttura, in tavernetta lo scavo (solo la prima volta)
+  const price = FLOORS[build.floor][3] + (floors[i] == null ? FLOOR_EXTRA[viewLv] : 0);
   if (g.money < price) return;
-  g.floors[i] = build.floor;
+  floors[i] = build.floor;
   g.money -= price;
   d.cost = (d.cost ?? 0) + price;
 }
+const walls = () => g.levels[viewLv].walls;
 function wallTool(sx, sy) {
   const k = wallAt(sx, sy);
+  if (!k && build.tool === 'abbatti' && viewLv !== 0) {   // su tavernetta e primo piano si può togliere il pavimento
+    const [x, y] = v.tile(sx, sy).map(Math.floor);
+    const floors = g.levels[viewLv].floors;
+    if (floorAt(g, viewLv, x, y) == null) return;
+    if (g.objects.some(o => lvOf(o) === viewLv && (() => { const f = footprint(o); return x >= f.x && x < f.x + f.w && y >= f.y && y < f.y + f.d; })())) return toast('Prima togli il mobile che c\'è sopra.');
+    if (g.sims.some(s => s.lv === viewLv && Math.floor(s.x) === x && Math.floor(s.y) === y)) return toast('C\'è un Sim sopra.');
+    floors[y * g.W + x] = null;
+    save();
+    return;
+  }
   if (!k) return toast('Tocca proprio sul muro.');
-  const wl = g.walls[k];
+  const wl = walls()[k];
   const [t, a, b] = k.split(':');
   if (build.tool === 'abbatti') {
     const outer = (t === 'h' && (+b === 0 || +b === g.H)) || (t === 'v' && (+a === 0 || +a === g.W));
-    delete g.walls[k];
+    delete walls()[k];
     g.money += 5;
     if (outer) toast('Abbattuto (era sul bordo del lotto).');
   } else if (build.tool === 'porta') {
     if (wl.door) delete wl.door;
-    else { if (g.money < PRICES.porta) return toast('Non avete abbastanza soldi.'); wl.door = true; delete wl.win; g.money -= PRICES.porta; }
+    else { if (g.money < PRICES.porta) return toast('Non avete abbastanza soldi.'); wl.door = true; delete wl.win; delete wl.garage; g.money -= PRICES.porta; }
+  } else if (build.tool === 'saracinesca') {
+    if (wl.garage) delete wl.garage;
+    else { if (g.money < PRICES.saracinesca) return toast('Non avete abbastanza soldi.'); wl.garage = true; delete wl.win; delete wl.door; g.money -= PRICES.saracinesca; }
   } else if (build.tool === 'finestra') {
     if (wl.win) delete wl.win;
     else { if (g.money < PRICES.finestra) return toast('Non avete abbastanza soldi.'); wl.win = true; delete wl.door; g.money -= PRICES.finestra; }
@@ -580,7 +693,7 @@ function startPlacing(type) {
   const T = TYPES[type];
   if (g.money < T.price) return toast('Non avete abbastanza soldi.');
   const [tx, ty] = v.tile(w / 2, h * 0.4);
-  build.placing = { type, x: Math.max(0, Math.floor(tx)), y: Math.max(0, Math.floor(ty)), rot: 0, color: T.colors?.[0] };
+  build.placing = { type, x: Math.max(0, Math.floor(tx)), y: Math.max(0, Math.floor(ty)), rot: 0, color: T.colors?.[0], lv: viewLv };
   buildPanel();
 }
 function sell(o) {
@@ -593,16 +706,25 @@ function sell(o) {
 }
 function confirmPlace() {
   const p = build.placing;
-  if (!canPlace(g, p, p.moveId)) return toast('Qui non ci sta: trascinalo su un posto libero (riquadro verde).');
+  if (!canPlace(g, p, p.moveId)) return toast(TYPES[p.type].stairs && viewLv === 1 ? 'Dal primo piano non si sale più su.' : 'Qui non ci sta: trascinalo su un posto libero (riquadro verde).');
+  if (TYPES[p.type].stairs) {   // la scala porta al piano sopra: lì serve un pezzo di pavimento libero dove si arriva
+    const { bottom, top } = stairEnds(p);
+    if (floorAt(g, bottom[2], bottom[0], bottom[1]) == null) return toast('Davanti alla scala (dove si sale) serve il pavimento.');
+    const busy = g.objects.some(o => lvOf(o) === top[2] && o.id !== p.moveId && (() => { const f = footprint(o); return top[0] >= f.x && top[0] < f.x + f.w && top[1] >= f.y && top[1] < f.y + f.d; })());
+    if (busy) return toast('Al piano di sopra, dove arriva la scala, c\'è un mobile.');
+    const up = g.levels[top[2]].floors;
+    if (up[top[1] * g.W + top[0]] == null) up[top[1] * g.W + top[0]] = 'legno';
+  }
   if (p.moveId) {
     const o = g.objects.find(x => x.id === p.moveId);
     if (g.sims.some(s => s.cur?.obj === o.id)) return toast('Lo stanno usando: aspetta che finiscano.');
     Object.assign(o, { x: p.x, y: p.y, rot: p.rot, color: p.color });
   } else {
-    g.objects.push({ id: Math.random().toString(36).slice(2, 9), type: p.type, x: p.x, y: p.y, rot: p.rot, color: p.color, users: [] });
+    g.objects.push({ id: Math.random().toString(36).slice(2, 9), type: p.type, x: p.x, y: p.y, rot: p.rot, color: p.color, users: [], lv: viewLv });
     g.money -= TYPES[p.type].price;
-    toast(`Comprato: ${TYPES[p.type].name}`);
+    toast(TYPES[p.type].stairs ? `Scala costruita: con ▲▼ vai al piano ${viewLv === -1 ? 'terra' : 'di sopra'}${viewLv === 0 ? ' e posa il pavimento con Costruisci' : ''}.` : `Comprato: ${TYPES[p.type].name}`);
     gameEvent(g, null, 'buy', notify);
+    if (TYPES[p.type].stairs) gameEvent(g, null, 'stairs', notify);
   }
   build.placing = null;
   save();
@@ -710,6 +832,8 @@ document.addEventListener('click', async e => {
   }
   const cn = t.closest('[data-cancel]');
   if (cn) { cancel(g, g.sims[sel], +cn.dataset.cancel); hud(); return; }
+  const lvb = t.closest('[data-lv]');
+  if (lvb) { setLevel(viewLv + +lvb.dataset.lv); return; }
   if (t.closest('[data-zoom]')) { zoomAt(w / 2, h / 2, v.z * (t.closest('[data-zoom]').dataset.zoom === '+' ? 1.2 : 1 / 1.2)); return; }
   if (t.closest('[data-build]')) return build ? closeBuild() : openBuild();
   if (t.closest('[data-jobs]')) return jobsSheet();
