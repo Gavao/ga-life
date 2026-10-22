@@ -100,8 +100,14 @@ export function drawSim(ctx, v, sx, sy, look, o = {}) {
   const k = 0.9 * z;
   const bob = o.walk ? Math.abs(Math.sin(o.walk)) * 2 * k : 0;
   const sit = o.pose === 'sit';
-  // ombra
-  if (o.pose !== 'sleep') {
+  // ombra (in piscina: cerchi nell'acqua e si vede solo dal petto in su)
+  if (o.pose === 'swim') {
+    ctx.strokeStyle = 'rgba(255,255,255,.6)';
+    ctx.lineWidth = 1.5;
+    const r = 12 + Math.sin(performance.now() / 300) * 2;
+    ctx.beginPath(); ctx.ellipse(0, -20 * k, r * k, r * 0.45 * k, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.rect(-40 * k, -120 * k, 80 * k, 100 * k); ctx.clip();
+  } else if (o.pose !== 'sleep') {
     ctx.fillStyle = 'rgba(0,0,0,.22)';
     ctx.beginPath(); ctx.ellipse(0, 0, 11 * k, 4.5 * k, 0, 0, Math.PI * 2); ctx.fill();
   }
